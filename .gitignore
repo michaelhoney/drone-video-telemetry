@@ -1,0 +1,11 @@
+# Large data files — keep the folders, ignore contents
+dem/**
+!dem/.gitkeep
+mp4/**
+!mp4/.gitkeep
+
+# Releases
+releases/
+
+# macOS
+.DS_Store

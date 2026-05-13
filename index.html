@@ -1,0 +1,2000 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DJI Telemetry Map Viewer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+
+  .container { display: flex; flex-direction: column; min-height: 100vh; }
+  .video-panel { flex: none; display: flex; flex-direction: column; background: #0f0f1a; }
+  .map-panel { flex: 1; position: relative; min-height: 50vh; }
+
+  .video-wrap { position: relative; width: 100%; padding-top: 56.25%; background: #000; }
+  .video-wrap video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
+
+  .drop-zone {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border: 2px dashed #444; border-radius: 0; cursor: pointer;
+    transition: border-color 0.2s;
+    overflow: hidden; z-index: 4;
+    background: linear-gradient(to right, rgba(255,160,40,0.15) var(--progress, 0%), transparent var(--progress, 0%));
+  }
+  .drop-zone:hover, .drop-zone.dragover { border-color: #ffa028; }
+  .drop-zone h3 { font-size: 1.3em; margin-bottom: 6px; color: #aaa; }
+  .drop-zone p { font-size: 0.85em; color: #666; }
+  .drop-zone.loaded { border-color: #2ecc71; border-style: solid; display: none; }
+  .drop-zone.loaded h3 { color: #2ecc71; }
+
+  .app-version {
+    position: absolute;
+    top: 10px;
+    left: 16px;
+    z-index: 5;
+    padding: 3px 7px;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 999px;
+    background: rgba(10,10,18,0.72);
+    color: #8f8fa4;
+    font-size: 0.68em;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    pointer-events: none;
+    backdrop-filter: blur(4px);
+  }
+
+  /* ── HUD strip between video and map ── */
+  .hud-strip {
+    display: grid;
+    background: #0d0d1a;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    padding: 8px 20px;
+    align-items: center;
+    flex: none;
+    grid-template-columns: 2fr 1fr 2fr;
+    gap: 0;
+  }
+  .hud-left, .hud-right {
+    display: flex; align-items: center; gap: 24px;
+  }
+  .hud-left { justify-content: flex-end; }
+  .hud-right { justify-content: flex-start; }
+  .hud-centre {
+    display: flex; justify-content: center; align-items: center;
+  }
+
+  .hud-cell {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+  }
+  .hud-cell .hud-label {
+    font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.08em; color: #999;
+  }
+  .hud-cell .hud-value {
+    font-size: 1.8em; font-weight: 500; font-variant-numeric: tabular-nums; color: #ccc;
+    min-width: 7em; text-align: center;
+  }
+
+  /* Time cell: small date on top, large time below */
+  .hud-time {
+    display: flex; flex-direction: column; align-items: center; gap: 0;
+    min-width: 6.5em;
+  }
+  .hud-time .hud-time-date {
+    font-size: 0.72em; color: #999;
+  }
+  .hud-time .hud-time-clock {
+    font-size: 1.8em; font-weight: 500; font-variant-numeric: tabular-nums; color: #ccc; line-height: 1.1;
+  }
+
+  /* Instrument cells: label+value on the left, canvas on the right */
+  .hud-instrument {
+    display: flex; flex-direction: row; align-items: center; gap: 8px;
+  }
+  .hud-instrument .hud-text {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+  }
+  .hud-instrument .hud-label {
+    font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.08em; color: #999;
+  }
+  .hud-instrument .hud-value {
+    font-size: 1.8em; font-weight: 500; font-variant-numeric: tabular-nums; color: #ccc;
+    min-width: 4.5em; text-align: right;
+  }
+  .hud-instrument canvas {
+    display: block;
+  }
+
+  /* Compass tape */
+  .hud-compass {
+    display: flex; flex-direction: column; align-items: center; gap: 0;
+  }
+  .hud-compass canvas {
+    display: block;
+  }
+
+  #map { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+  .relock-btn {
+    position: absolute; top: 12px; right: 12px; z-index: 1000;
+    background: rgba(108,99,255,0.9); color: #fff; border: none; border-radius: 8px;
+    padding: 8px 14px; cursor: pointer; font-size: 0.82em; display: none;
+    backdrop-filter: blur(4px);
+  }
+  .relock-btn:hover { background: rgba(108,99,255,1); }
+
+  /* ── Map overlay controls ── */
+  .map-controls {
+    position: absolute; bottom: 12px; left: 12px; z-index: 1000;
+    display: none; flex-direction: column; gap: 6px;
+    background: rgba(15,15,26,0.85); border-radius: 8px; padding: 10px 14px;
+    backdrop-filter: blur(6px); font-size: 0.8em;
+  }
+  .map-controls label { display: flex; align-items: center; gap: 6px; cursor: pointer; color: #ccc; }
+  .map-controls label.is-disabled { color: #777; cursor: default; }
+  .map-controls input[type="checkbox"] { accent-color: #ffa028; }
+  .map-controls .slider-row { display: flex; align-items: center; gap: 6px; }
+  .map-controls .slider-row.is-disabled { color: #666; }
+  .map-controls input[type="range"] { width: 80px; accent-color: #ffa028; }
+  .map-controls input[type="range"]:disabled { accent-color: #555; opacity: 0.55; }
+  .map-control-note {
+    margin: -2px 0 4px 22px;
+    max-width: 260px;
+    color: #999;
+    line-height: 1.35;
+  }
+
+  .footprint-badge {
+    position: absolute; top: 12px; left: 56px; z-index: 1000;
+    display: none;
+    background: rgba(15,15,26,0.88);
+    border: 1px solid rgba(255,160,40,0.32);
+    border-radius: 10px;
+    padding: 8px 12px;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.28);
+  }
+  .footprint-badge strong,
+  .footprint-badge small {
+    display: block;
+  }
+  .footprint-badge strong {
+    color: #ffd29a;
+    font-size: 0.84em;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+  .footprint-badge small {
+    color: #aaa;
+    font-size: 0.74em;
+    margin-top: 2px;
+  }
+
+  /* ── Gear / settings panel (button is a Leaflet control, styled by leaflet-bar) ── */
+  .gear-leaflet-btn {
+    display: flex !important; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  .gear-leaflet-btn svg { display: block; pointer-events: none; }
+
+  .hud-settings-panel {
+    display: none; position: absolute; top: 0; left: 36px; z-index: 2000;
+    background: rgba(15,15,26,0.95); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px; padding: 10px 14px; min-width: 180px;
+    backdrop-filter: blur(6px); box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  .hud-settings-panel.open { display: block; }
+
+  .export-btn {
+    width: 100%; background: rgba(108,99,255,0.85); color: #fff; border: none;
+    border-radius: 6px; padding: 8px 12px; cursor: pointer; font-size: 0.82em;
+    text-align: left;
+  }
+  .export-btn:hover { background: rgba(108,99,255,1); }
+
+  .status-msg {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    color: #555; font-size: 1.1em; z-index: 1000; pointer-events: none; text-align: center;
+  }
+  .status-msg.error { color: #ff6b6b; }
+
+  .map-hint {
+    display: none;
+    position: absolute; bottom: 96px; left: 50%; transform: translateX(-50%);
+    z-index: 5;
+    flex-direction: column; align-items: center; justify-content: center;
+    padding: 8px 18px 4px;
+    border-radius: 8px;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(6px);
+    color: rgba(255,255,255,0.7); font-size: 0.85em;
+    text-align: center; pointer-events: none;
+    animation: map-hint-pulse 2s ease-in-out infinite;
+  }
+  .map-hint svg { margin-top: 2px; }
+  @keyframes map-hint-pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+
+  .drone-icon { transition: none; }
+
+  /* ── Raw telemetry debug panel ── */
+  .debug-panel {
+    display: none; position: absolute; top: 0; right: 0; bottom: 0;
+    width: 280px; z-index: 1001; overflow-y: auto;
+    background: rgba(8,8,18,0.94); backdrop-filter: blur(6px);
+    border-left: 1px solid rgba(255,255,255,0.07);
+    font-family: 'SF Mono','Fira Code','Consolas',monospace;
+    font-size: 0.72em; padding: 10px 12px 20px;
+  }
+  .debug-panel.open { display: block; }
+  .debug-time { color: #777; margin-bottom: 8px; }
+  .debug-grp { margin-bottom: 9px; }
+  .debug-grp-title { color: #6c6fff; font-weight: 600; border-bottom: 1px solid rgba(108,99,255,0.18); padding-bottom: 2px; margin-bottom: 3px; }
+  .debug-row { display: flex; gap: 4px; padding: 1px 0; line-height: 1.4; }
+  .debug-row .dk { color: #555; min-width: 3.4em; flex-shrink: 0; }
+  .debug-row .dv { color: #ccc; flex: 1; text-align: right; }
+  .debug-row .di { color: #444; font-size: 0.85em; padding-left: 4px; white-space: nowrap; }
+  .debug-row.used .dk { color: #ffa028; }
+  .debug-row.used .dv { color: #ffd29a; }
+
+  .debug-toggle-btn {
+    position: absolute; top: 46px; right: 12px; z-index: 1002;
+    display: none;
+    background: rgba(10,10,20,0.82); color: #555;
+    border: 1px solid rgba(255,255,255,0.09); border-radius: 6px;
+    padding: 5px 9px; cursor: pointer;
+    font-size: 0.7em; letter-spacing: 0.08em; text-transform: uppercase;
+    backdrop-filter: blur(4px); font-family: inherit;
+  }
+  .debug-toggle-btn.active { color: #ffa028; border-color: rgba(255,160,40,0.3); background: rgba(255,160,40,0.07); }
+
+  /* ── Custom video control bar ── */
+  .video-ctrl-bar {
+    display: none; align-items: center; gap: 10px;
+    padding: 5px 14px;
+    background: #0a0a14;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    flex: none;
+  }
+  .vcb-btn {
+    background: none; border: 1px solid rgba(255,255,255,0.12); border-radius: 4px;
+    color: #bbb; cursor: pointer; font-size: 0.78em; padding: 3px 9px; line-height: 1.5;
+    flex-shrink: 0;
+  }
+  .vcb-btn:hover { color: #fff; border-color: rgba(255,255,255,0.32); }
+  .vcb-seek {
+    flex: 1; height: 5px; background: #252535; border-radius: 3px; cursor: pointer; position: relative;
+  }
+  .vcb-seek-fill { height: 100%; background: #ffa028; border-radius: 3px; pointer-events: none; }
+  .vcb-time {
+    color: #555; font-size: 0.73em; font-variant-numeric: tabular-nums;
+    white-space: nowrap; min-width: 9em; text-align: right; flex-shrink: 0;
+  }
+  #video { cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="video-panel">
+    <div class="video-wrap">
+      <div class="app-version">v0.5</div>
+      <video id="video" style="display:none"></video>
+      <div class="drop-zone" id="dropMp4">
+        <h3>Drop DJI MP4 here</h3>
+        <p>or click to browse — supports MP4, MP4+SRT pairs, or SRT alone</p>
+        <input type="file" accept=".mp4,.MP4,.srt,.SRT" multiple style="display:none">
+      </div>
+      <div class="map-hint" id="mapHint">
+        <span>Map &amp; telemetry readout are below</span>
+        <svg width="28" height="48" viewBox="0 0 28 48" fill="none"><path d="M14 4v36M6 32l8 10 8-10" stroke="rgba(255,255,255,0.5)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+    </div>
+    <div class="video-ctrl-bar" id="videoCtrlBar">
+      <button class="vcb-btn" id="vcbPlayPause" title="Play / Pause (Space)">&#9654;</button>
+      <div class="vcb-seek" id="vcbSeek"><div class="vcb-seek-fill" id="vcbSeekFill"></div></div>
+      <span class="vcb-time" id="vcbTime">0:00 / 0:00</span>
+    </div>
+  </div>
+
+  <!-- HUD strip: replaces load-bar once telemetry is ready -->
+  <div class="hud-strip" id="hudStrip">
+    <div class="hud-left">
+      <div class="hud-time">
+        <span class="hud-time-date" id="hudTimeDate">--</span>
+        <span class="hud-time-clock" id="hudTimeClock">--:--:--</span>
+      </div>
+      <div class="hud-instrument">
+        <div class="hud-text">
+          <span class="hud-label">Pitch</span>
+          <span class="hud-value" id="hudPitch">--</span>
+        </div>
+        <canvas id="hudPitchCanvas" width="80" height="80"></canvas>
+      </div>
+      <div class="hud-instrument">
+        <div class="hud-text">
+          <span class="hud-label">Heading</span>
+          <span class="hud-value" id="hudHeading">--</span>
+        </div>
+        <canvas id="hudHeadingCanvas" width="80" height="80"></canvas>
+      </div>
+    </div>
+    <div class="hud-centre">
+      <div class="hud-compass">
+        <canvas id="hudCompassCanvas" width="240" height="56"></canvas>
+      </div>
+    </div>
+    <div class="hud-right">
+      <div class="hud-cell">
+        <span class="hud-label">H. Speed</span>
+        <span class="hud-value" id="hudHSpeed">--</span>
+      </div>
+      <div class="hud-cell">
+        <span class="hud-label">V. Speed</span>
+        <span class="hud-value" id="hudVSpeed">--</span>
+      </div>
+      <div class="hud-cell">
+        <span class="hud-label">Rel Alt</span>
+        <span class="hud-value" id="hudRelAlt">--</span>
+      </div>
+      <div class="hud-cell">
+        <span class="hud-label">Abs Alt</span>
+        <span class="hud-value" id="hudAbsAlt">--</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="map-panel">
+    <div id="map"></div>
+    <div class="status-msg" id="statusMsg"></div>
+    <div class="footprint-badge" id="footprintBadge"></div>
+    <button class="relock-btn" id="relockBtn">Re-lock to drone</button>
+    <div class="map-controls" id="mapControls">
+      <label id="footprintControlLabel"><input type="checkbox" id="chkFootprint" checked> <span id="footprintLabelText">Estimated footprint (flat ground)</span></label>
+      <div class="map-control-note" id="footprintNote">Using rel altitude on a flat-ground assumption. Load a DEM over HTTP for terrain-aware intersections.</div>
+      <label id="heatmapControlLabel" class="is-disabled"><input type="checkbox" id="chkHeatmap" disabled> <span id="heatmapLabelText">Visibility heatmap (needs DEM files over HTTP)</span></label>
+      <div class="slider-row is-disabled" id="heatmapOpacityRow">
+        <span style="color:#888">Opacity</span>
+        <input type="range" id="heatmapOpacity" min="0" max="100" value="100" disabled>
+      </div>
+    </div>
+    <button class="debug-toggle-btn" id="debugToggleBtn" title="Toggle raw telemetry debug panel (djmd only)">RAW</button>
+    <div class="debug-panel" id="debugPanel"></div>
+  </div>
+</div>
+
+<script>
+// ── Telemetry interpretation paths ──
+// Add new PATH_* constants here as new drone types are supported.
+// Set currentTelemetryPath in processSamples() at parse time.
+const PATH_DRONE_POS  = 1;  // Path 1 (Matrice 4E): lat/lon = drone position; FOV polygon ray-cast from drone
+const PATH_TARGET_POS = 2;  // Path 2 (Matrice 3 + Zenmuse): lat/lon = camera ground-target point
+const PATH_SRT_FILE   = 3;  // Path 3 (DJI .SRT sidecar): telemetry from companion .SRT file
+let currentTelemetryPath = PATH_DRONE_POS;  // default; overridden during parsing
+
+// ── State ──
+let telemetry = [];
+let telemetryReady = false;
+let followDrone = true;
+let map, droneMarker, fullPathLine, travelledPathLine;
+let prevAltSample = null; // for vertical speed calc
+let debugOpen = false;
+
+// ── Map init ──
+map = L.map('map', { zoomControl: false }).setView([-42.14, 147.64], 15);
+L.control.zoom({ position: 'topleft' }).addTo(map);
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  attribution: '&copy; Esri, Maxar, Earthstar Geographics',
+  maxZoom: 19
+}).addTo(map);
+
+map.on('dragstart', () => {
+  if (telemetryReady) { followDrone = false; document.getElementById('relockBtn').style.display = 'block'; }
+});
+document.getElementById('relockBtn').addEventListener('click', () => {
+  followDrone = true;
+  document.getElementById('relockBtn').style.display = 'none';
+});
+
+// Drone marker
+const droneIconSvg = `<svg width="32" height="32" viewBox="-16 -16 32 32" style="transform:rotate(0deg)" class="drone-svg">
+  <polygon points="0,-12 8,8 0,4 -8,8" fill="#ffa028" stroke="#fff" stroke-width="1.5" opacity="0.95"/>
+</svg>`;
+const droneIcon = L.divIcon({ html: droneIconSvg, className: 'drone-icon', iconSize: [32, 32], iconAnchor: [16, 16] });
+droneMarker = L.marker([0, 0], { icon: droneIcon, interactive: false });
+
+// ── HUD drawing ──
+const headingCanvas = document.getElementById('hudHeadingCanvas');
+const pitchCanvas   = document.getElementById('hudPitchCanvas');
+const compassCanvas = document.getElementById('hudCompassCanvas');
+const hCtx = headingCanvas.getContext('2d');
+const pCtx = pitchCanvas.getContext('2d');
+const cCtx = compassCanvas.getContext('2d');
+
+function drawHeading(deg) {
+  const w = headingCanvas.width, h = headingCanvas.height;
+  const cx = w / 2, cy = h / 2, r = 34;
+  hCtx.clearRect(0, 0, w, h);
+
+  // Outer circle
+  hCtx.strokeStyle = '#444';
+  hCtx.lineWidth = 1.5;
+  hCtx.beginPath();
+  hCtx.arc(cx, cy, r, 0, Math.PI * 2);
+  hCtx.stroke();
+
+  // Cardinal ticks (N E S W)
+  const cardinals = [0, 90, 180, 270];
+  for (const c of cardinals) {
+    const cRad = (c - 90) * Math.PI / 180;
+    hCtx.strokeStyle = c === 0 ? '#aaa' : '#555';
+    hCtx.lineWidth = c === 0 ? 2 : 1;
+    hCtx.beginPath();
+    hCtx.moveTo(cx + Math.cos(cRad) * r, cy + Math.sin(cRad) * r);
+    hCtx.lineTo(cx + Math.cos(cRad) * (r + 5), cy + Math.sin(cRad) * (r + 5));
+    hCtx.stroke();
+  }
+
+  // Triangle pointer rotated to heading
+  const rad = (deg - 90) * Math.PI / 180;
+  const triSize = 13;
+  hCtx.save();
+  hCtx.translate(cx, cy);
+  hCtx.rotate(rad + Math.PI / 2);
+  hCtx.strokeStyle = '#ffa028';
+  hCtx.lineWidth = 2;
+  hCtx.beginPath();
+  hCtx.moveTo(0, -triSize);
+  hCtx.lineTo(triSize * 0.6, triSize * 0.5);
+  hCtx.lineTo(-triSize * 0.6, triSize * 0.5);
+  hCtx.closePath();
+  hCtx.stroke();
+  hCtx.restore();
+}
+
+function drawPitch(deg) {
+  const w = pitchCanvas.width, h = pitchCanvas.height;
+  const cx = w / 2, cy = h / 2, r = 34;
+  pCtx.clearRect(0, 0, w, h);
+
+  // Outer circle
+  pCtx.strokeStyle = '#444';
+  pCtx.lineWidth = 1.5;
+  pCtx.beginPath();
+  pCtx.arc(cx, cy, r, 0, Math.PI * 2);
+  pCtx.stroke();
+
+  // Horizon line
+  pCtx.strokeStyle = '#555';
+  pCtx.lineWidth = 1;
+  pCtx.beginPath();
+  pCtx.moveTo(cx - r + 4, cy);
+  pCtx.lineTo(cx + r - 4, cy);
+  pCtx.stroke();
+
+  // Small ticks at ±45°
+  for (const tick of [-45, 45]) {
+    const y = cy - (tick / 90) * (r - 4);
+    pCtx.beginPath();
+    pCtx.moveTo(cx - 5, y);
+    pCtx.lineTo(cx + 5, y);
+    pCtx.stroke();
+  }
+
+  // V-shape pivoting at apex, pointing upward (rotated 180° from before)
+  const rad = (-deg) * Math.PI / 180;
+  const armLen = 22;
+  const halfSpread = 25 * Math.PI / 180;
+
+  pCtx.save();
+  pCtx.translate(cx, cy);
+  pCtx.strokeStyle = '#ffa028';
+  pCtx.lineWidth = 2;
+  pCtx.beginPath();
+  // Left arm — from apex outward (flipped: use rad directly, not rad + PI)
+  pCtx.moveTo(
+    armLen * Math.cos(rad + halfSpread),
+    armLen * Math.sin(rad + halfSpread)
+  );
+  // Apex at origin
+  pCtx.lineTo(0, 0);
+  // Right arm
+  pCtx.lineTo(
+    armLen * Math.cos(rad - halfSpread),
+    armLen * Math.sin(rad - halfSpread)
+  );
+  pCtx.stroke();
+  pCtx.restore();
+}
+
+// ── Compass tape ──
+const COMPASS_POINTS = [
+  { deg: 0,   label: 'N'  },
+  { deg: 45,  label: 'NE' },
+  { deg: 90,  label: 'E'  },
+  { deg: 135, label: 'SE' },
+  { deg: 180, label: 'S'  },
+  { deg: 225, label: 'SW' },
+  { deg: 270, label: 'W'  },
+  { deg: 315, label: 'NW' },
+];
+
+function drawCompass(heading) {
+  const w = compassCanvas.width, h = compassCanvas.height;
+  const cx = w / 2, cy = h / 2;
+  cCtx.clearRect(0, 0, w, h);
+
+  // Pixels per degree — how spread out the tape is
+  const pxPerDeg = 1.8;
+
+  // Centre pointer tick
+  cCtx.strokeStyle = '#ffa028';
+  cCtx.lineWidth = 2;
+  cCtx.beginPath();
+  cCtx.moveTo(cx, 2);
+  cCtx.lineTo(cx, 10);
+  cCtx.stroke();
+
+  // Draw compass points and small degree ticks
+  for (let rawDeg = -360; rawDeg <= 720; rawDeg += 5) {
+    let diff = rawDeg - heading;
+    // Wrap to [-180, 180]
+    while (diff > 180) diff -= 360;
+    while (diff < -180) diff += 360;
+
+    const x = cx + diff * pxPerDeg;
+    if (x < -20 || x > w + 20) continue;
+
+    // Small ticks every 5°
+    if (rawDeg % 5 === 0) {
+      const tickH = (rawDeg % 45 === 0) ? 6 : 3;
+      cCtx.strokeStyle = '#444';
+      cCtx.lineWidth = 1;
+      cCtx.beginPath();
+      cCtx.moveTo(x, h - 2);
+      cCtx.lineTo(x, h - 2 - tickH);
+      cCtx.stroke();
+    }
+  }
+
+  // Labels
+  cCtx.font = '13px -apple-system, BlinkMacSystemFont, sans-serif';
+  cCtx.textAlign = 'center';
+  cCtx.textBaseline = 'middle';
+
+  for (const pt of COMPASS_POINTS) {
+    // Try multiple wraps to catch all visible instances
+    for (const offset of [-360, 0, 360]) {
+      const deg = pt.deg + offset;
+      let diff = deg - heading;
+      while (diff > 180) diff -= 360;
+      while (diff < -180) diff += 360;
+      const x = cx + diff * pxPerDeg;
+      if (x < -10 || x > w + 10) continue;
+
+      const isCardinal = pt.label.length === 1;
+      cCtx.fillStyle = isCardinal ? '#ccc' : '#777';
+      cCtx.font = isCardinal ? 'bold 21px -apple-system, sans-serif' : '18px -apple-system, sans-serif';
+      cCtx.fillText(pt.label, x, cy);
+    }
+  }
+}
+
+// ── Telemetry line parser ──
+function parseTelemetryLine(text, startTime) {
+  const fieldRe = /(\w+):\s*([-\d.\/]+)/g;
+  const tsRe = /FrameCnt:\s*\d+\s+(.+?)(?:\s*\[|$)/;
+  const entry = { t: startTime };
+  let m;
+  while ((m = fieldRe.exec(text)) !== null) {
+    const [, key, val] = m;
+    switch (key) {
+      case 'latitude':  entry.lat = parseFloat(val); break;
+      case 'longitude': entry.lon = parseFloat(val); break;
+      case 'rel_alt':   entry.relAlt = parseFloat(val); break;
+      case 'abs_alt':   entry.absAlt = parseFloat(val); break;
+      case 'gb_yaw':    entry.yaw = parseFloat(val); break;
+      case 'gb_pitch':  entry.pitch = parseFloat(val); break;
+      case 'iso':       entry.iso = val.trim(); break;
+      case 'shutter':   entry.shutter = val.trim(); break;
+      case 'fnum':      entry.fnum = val.trim(); break;
+      case 'focal_len': entry.focalLen = val.trim(); break;
+    }
+  }
+  const tsm = text.match(tsRe);
+  if (tsm) {
+    entry.timestamp = tsm[1].trim();
+  } else {
+    const srtTsRe = /(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)/;
+    const srtTsm = text.match(srtTsRe);
+    if (srtTsm) entry.timestamp = srtTsm[1].trim();
+  }
+  if (entry.lat !== undefined && entry.lon !== undefined) return entry;
+  return null;
+}
+
+// ── SRT text parser (fallback) ──
+function parseSRT(text) {
+  const entries = [];
+  const blocks = text.trim().split(/\n\s*\n/);
+  const timeRe = /(\d{2}):(\d{2}):(\d{2}),(\d{3})/;
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    if (lines.length < 3) continue;
+    const tm = lines[1].match(timeRe);
+    if (!tm) continue;
+    const t = +tm[1] * 3600 + +tm[2] * 60 + +tm[3] + +tm[4] / 1000;
+    const data = lines.slice(2).join(' ');
+    const entry = parseTelemetryLine(data, t);
+    if (entry) entries.push(entry);
+  }
+  return entries;
+}
+
+// ── djmd binary telemetry parser (DJI Matrice / ZH20T) ──
+function protoVarint(bytes, pos) {
+  let lo = 0, hi = 0, shift = 0;
+  while (pos < bytes.length) {
+    const b = bytes[pos++];
+    if (shift < 32) {
+      lo = (lo | ((b & 0x7F) << shift)) >>> 0;
+      // At shift=28 the 7-bit group straddles the 32-bit boundary;
+      // the top 3 bits must also be written into hi.
+      if (shift > 25) hi = (hi | ((b & 0x7F) >>> (32 - shift))) >>> 0;
+    } else {
+      hi = (hi | ((b & 0x7F) << (shift - 32))) >>> 0;
+    }
+    if (!(b & 0x80)) break;
+    shift += 7;
+  }
+  let val;
+  if (hi & 0x80000000) {
+    const nlo = (~lo >>> 0) + 1;
+    const carry = nlo > 0xFFFFFFFF ? 1 : 0;
+    val = -(((~hi >>> 0) + carry) * 4294967296 + (nlo >>> 0));
+  } else {
+    val = hi * 4294967296 + lo;
+  }
+  return { val, pos };
+}
+
+function protoMsg(bytes, start, end) {
+  const f = {};
+  let pos = start;
+  while (pos < end && pos < bytes.length) {
+    try {
+      const t = protoVarint(bytes, pos); pos = t.pos;
+      const fn = Math.floor(t.val / 8), wt = t.val % 8;
+      if (fn === 0) break;
+      if (wt === 0) {
+        const r = protoVarint(bytes, pos); pos = r.pos;
+        (f[fn] = f[fn] || []).push(r.val);
+      } else if (wt === 1) {
+        const v = new DataView(bytes.buffer, bytes.byteOffset + pos).getFloat64(0, true);
+        (f[fn] = f[fn] || []).push(v); pos += 8;
+      } else if (wt === 2) {
+        const lr = protoVarint(bytes, pos); pos = lr.pos;
+        const len = lr.val;
+        (f[fn] = f[fn] || []).push(bytes.slice(pos, pos + len)); pos += len;
+      } else if (wt === 5) {
+        const v = new DataView(bytes.buffer, bytes.byteOffset + pos).getFloat32(0, true);
+        (f[fn] = f[fn] || []).push(v); pos += 4;
+      } else break;
+    } catch(e) { break; }
+  }
+  return f;
+}
+
+function parseDjmdSamples(samples) {
+  const entries = [];
+  let anyDirectYaw = false;
+  for (const sample of samples) {
+    const t = sample.cts / sample.timescale;
+    const raw = new Uint8Array(sample.data);
+    const outer = protoMsg(raw, 0, raw.length);
+
+    // field 6: position+velocity sub-message
+    //   .f6 = abs alt (varint mm)   .f4 = vel-N (m/s, float32)  .f5 = vel-E (m/s, float32)
+    const posBlob = (outer[6] || [])[0];
+    let absAlt = null, hSpeed = null;
+    if (posBlob instanceof Uint8Array) {
+      const pos6 = protoMsg(posBlob, 0, posBlob.length);
+      const mm = (pos6[6] || [])[0];
+      if (typeof mm === 'number') absAlt = mm / 1000;
+      const vA = (pos6[4] || [])[0];
+      const vB = (pos6[5] || [])[0];
+      if (typeof vA === 'number' && typeof vB === 'number') hSpeed = Math.sqrt(vA * vA + vB * vB);
+    }
+
+    // field 9: GPS sub-message — field 7 = lat (float32°), field 6 = lon (float32°), field 5 = rel alt above home (varint mm)
+    const gpsBlob = (outer[9] || [])[0];
+    if (!(gpsBlob instanceof Uint8Array)) continue;
+    const gps = protoMsg(gpsBlob, 0, gpsBlob.length);
+    const lat = (gps[7] || [])[0];
+    const lon = (gps[6] || [])[0];
+    if (typeof lat !== 'number' || typeof lon !== 'number' || !isFinite(lat) || !isFinite(lon)) continue;
+
+    const relAltMm = (gps[5] || [])[0];
+    const relAlt   = typeof relAltMm === 'number' ? relAltMm / 1000 : absAlt;
+
+    // field 7: flight state sub-message
+    //   .f5 = gimbal pitch (signed, 1°/unit)
+    //   .f9 (Path 1 Matrice 4E): camera absolute azimuth (0.01°/unit, confirmed ~30° NNE)
+    //   .f9 (Path 2 Matrice 300): aircraft-relative gimbal value — NOT the absolute camera azimuth
+    const flBlob = (outer[7] || [])[0];
+    let pitch = 0, camYaw = null, _f7f9 = null;
+    if (flBlob instanceof Uint8Array) {
+      const fl = protoMsg(flBlob, 0, flBlob.length);
+      const rawPitch  = (fl[5] || [])[0];
+      if (typeof rawPitch === 'number') pitch = rawPitch;
+      const rawCamYaw = (fl[9] || [])[0];
+      if (typeof rawCamYaw === 'number') {
+        _f7f9 = rawCamYaw;
+        camYaw = ((rawCamYaw / 100) % 360 + 360) % 360;
+      }
+    }
+
+    // field 8: state sub-message
+    //   .f6 = aircraft heading, degrees direct (Path 1 / Matrice 4E)
+    //   .f8 = aircraft heading, 0.01°/unit (Path 2 / Matrice 300)
+    const stBlob = (outer[8] || [])[0];
+    let directYaw = null, _f8f8 = null;
+    if (stBlob instanceof Uint8Array) {
+      const st = protoMsg(stBlob, 0, stBlob.length);
+      const rawYaw = (st[6] || [])[0];
+      if (typeof rawYaw === 'number') directYaw = ((rawYaw % 360) + 360) % 360;
+      const raw8f8 = (st[8] || [])[0];
+      if (typeof raw8f8 === 'number') _f8f8 = raw8f8;
+    }
+
+    // Path 2 camera azimuth: f7.f9 encodes camera absolute azimuth at ~0.0535°/unit.
+    // Calibrated from two confirmed observations:
+    //   f7.f9=3359 → ~178° (due south, t=22.629s)
+    //   f7.f9=32   → ~0°  (due north, t=153.818s)
+    // Scale = 178/3327 ≈ 0.05350°/unit; zero at f7.f9≈32.
+    const cameraAz = (_f7f9 !== null)
+      ? (((_f7f9 - 32) * 178 / 3327) % 360 + 360) % 360
+      : null;
+
+    // Compact raw snapshot for debug panel: outer scalar fields + inner numeric fields of sub-messages
+    const _raw = {};
+    for (const fk of Object.keys(outer)) {
+      const fv = outer[fk][0];
+      if (typeof fv === 'number') {
+        _raw[fk] = fv;
+      } else if (fv instanceof Uint8Array) {
+        const sub = protoMsg(fv, 0, fv.length);
+        _raw[fk] = {};
+        for (const ik of Object.keys(sub)) {
+          const iv = sub[ik][0];
+          if (typeof iv === 'number') _raw[fk][ik] = iv;
+        }
+      }
+    }
+
+    if (directYaw !== null) anyDirectYaw = true;
+    entries.push({ t, lat, lon, absAlt, relAlt, yaw: directYaw ?? 0, pitch, hSpeed, camYaw, cameraAz,
+                   iso: null, shutter: null, fnum: null, focalLen: null, timestamp: null, _raw });
+  }
+
+  entries.sort((a, b) => a.t - b.t);
+
+  // Derive heading from GPS bearing only when no direct yaw field was found
+  if (!anyDirectYaw) {
+    for (let i = 0; i < entries.length; i++) {
+      const a = entries[i], b = entries[i + 1];
+      if (b && (a.lat !== b.lat || a.lon !== b.lon)) {
+        const dLon = (b.lon - a.lon) * Math.PI / 180;
+        const lat1 = a.lat * Math.PI / 180, lat2 = b.lat * Math.PI / 180;
+        const y = Math.sin(dLon) * Math.cos(lat2);
+        const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+        a.yaw = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+      } else {
+        a.yaw = i > 0 ? entries[i - 1].yaw : 0;
+      }
+    }
+  }
+
+  return entries;
+}
+
+// ── Extract subtitle track from MP4 using mp4box ──
+function extractTelemetryFromMp4(file) {
+  return new Promise((resolve, reject) => {
+    const statusMsg = document.getElementById('statusMsg');
+    statusMsg.textContent = 'Extracting telemetry...';
+    console.log('[telemetry] Starting extraction from', file.name, '(' + (file.size / 1024 / 1024).toFixed(1) + ' MB)');
+
+    const mp4box = MP4Box.createFile();
+    const samples = [];
+    let textTrackId = null;
+    let totalSamples = 0;
+    let isDjmd = false;
+
+    mp4box.onReady = function(info) {
+      console.log('[telemetry] MP4 parsed. Tracks:', info.tracks.map(t => ({ id: t.id, type: t.type, codec: t.codec, nb_samples: t.nb_samples })));
+
+      let textTrack = null;
+      for (const track of info.tracks) {
+        const codec = (track.codec || '').toLowerCase();
+        const type = (track.type || '').toLowerCase();
+        if (type === 'subtitles' || type === 'text' || codec.includes('tx3g') || codec.includes('text') || codec === 'stxt') {
+          textTrack = track;
+          break;
+        }
+      }
+      if (!textTrack) {
+        for (const track of info.tracks) {
+          if ((track.codec || '').toLowerCase().includes('djmd')) {
+            textTrack = track; isDjmd = true; break;
+          }
+        }
+      }
+      if (!textTrack) {
+        for (const track of info.tracks) {
+          if (track.type !== 'video' && track.type !== 'audio') { textTrack = track; break; }
+        }
+      }
+      if (!textTrack) {
+        console.error('[telemetry] No subtitle track found');
+        reject(new Error('No subtitle/telemetry track found in MP4'));
+        return;
+      }
+
+      textTrackId = textTrack.id;
+      totalSamples = textTrack.nb_samples;
+      console.log('[telemetry] Using track', textTrackId, '- codec:', textTrack.codec, '- samples:', totalSamples);
+      mp4box.setExtractionOptions(textTrackId, null, { nbSamples: 5000 });
+      mp4box.start();
+    };
+
+    mp4box.onSamples = function(trackId, ref, sampleArray) {
+      console.log('[telemetry] onSamples batch:', sampleArray.length, '| total so far:', samples.length + sampleArray.length);
+      for (const sample of sampleArray) samples.push(sample);
+      if (samples.length >= totalSamples) {
+        console.log('[telemetry] All', samples.length, 'samples collected. Parsing...');
+        const entries = processSamples(samples);
+        console.log('[telemetry] Parsed', entries.length, 'telemetry entries');
+        if (entries.length > 0) {
+          console.log('[telemetry] First entry:', entries[0]);
+          console.log('[telemetry] Last entry:', entries[entries.length - 1]);
+        }
+        resolve(entries);
+      }
+    };
+
+    mp4box.onError = function(e) {
+      console.error('[telemetry] MP4Box error:', e);
+      reject(new Error('MP4 parse error: ' + e));
+    };
+
+    function processSamples(samples) {
+      if (isDjmd) {
+        // djmd-only tracks = Matrice 300 thermal (no tx3g subtitle track present)
+        // Matrice 4E has both djmd and tx3g; the outer loop picks tx3g, so isDjmd stays false for it.
+        currentTelemetryPath = PATH_TARGET_POS;
+        return parseDjmdSamples(samples);
+      }
+      currentTelemetryPath = PATH_DRONE_POS;
+      const entries = [];
+      const decoder = new TextDecoder('utf-8');
+      for (const sample of samples) {
+        const startTime = sample.cts / sample.timescale;
+        const raw = new Uint8Array(sample.data);
+        let text;
+        if (raw.length > 2) {
+          const textLen = (raw[0] << 8) | raw[1];
+          if (textLen > 0 && textLen + 2 <= raw.length) {
+            text = decoder.decode(raw.slice(2, 2 + textLen));
+          } else {
+            text = decoder.decode(raw);
+          }
+        } else {
+          text = decoder.decode(raw);
+        }
+        const entry = parseTelemetryLine(text, startTime);
+        if (entry) entries.push(entry);
+      }
+      entries.sort((a, b) => a.t - b.t);
+      return entries;
+    }
+
+    const CHUNK = 64 * 1024 * 1024;
+    let offset = 0;
+    function readNextChunk() {
+      const slice = file.slice(offset, offset + CHUNK);
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const buf = e.target.result;
+        buf.fileStart = offset;
+        offset += buf.byteLength;
+        const pct = ((offset / file.size) * 100).toFixed(0);
+        console.log('[telemetry] Read chunk: offset', offset, '/', file.size, '(' + pct + '%)');
+        statusMsg.textContent = 'Reading MP4... ' + pct + '%';
+        document.getElementById('dropMp4').style.setProperty('--progress', pct + '%');
+        mp4box.appendBuffer(buf);
+        if (offset < file.size) {
+          readNextChunk();
+        } else {
+          console.log('[telemetry] All chunks read. Flushing...');
+          mp4box.flush();
+          setTimeout(() => {
+            if (samples.length > 0 && samples.length < totalSamples) {
+              console.warn('[telemetry] Timeout: only got', samples.length, 'of', totalSamples, 'samples. Processing what we have.');
+              resolve(processSamples(samples));
+            } else if (samples.length === 0) {
+              console.warn('[telemetry] No samples extracted after full read');
+              reject(new Error('No telemetry samples could be extracted'));
+            }
+          }, 2000);
+        }
+      };
+      reader.onerror = () => {
+        console.error('[telemetry] FileReader error at offset', offset);
+        reject(new Error('Failed to read file'));
+      };
+      reader.readAsArrayBuffer(slice);
+    }
+    readNextChunk();
+  });
+}
+
+// ── Binary search + interpolation ──
+function sampleAt(t) {
+  if (!telemetry.length) return null;
+  let lo = 0, hi = telemetry.length - 1;
+  if (t <= telemetry[0].t) return { ...telemetry[0] };
+  if (t >= telemetry[hi].t) return { ...telemetry[hi] };
+
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (telemetry[mid].t <= t) lo = mid; else hi = mid;
+  }
+
+  const a = telemetry[lo], b = telemetry[hi];
+  const f = (t - a.t) / (b.t - a.t);
+  const lerp = (v1, v2) => v1 + (v2 - v1) * f;
+
+  let dyaw = b.yaw - a.yaw;
+  if (dyaw > 180) dyaw -= 360;
+  if (dyaw < -180) dyaw += 360;
+
+  // Interpolate camera azimuth fields (may be null on non-djmd tracks)
+  let camYaw = null;
+  if (a.camYaw != null && b.camYaw != null) {
+    let dCam = b.camYaw - a.camYaw;
+    if (dCam > 180) dCam -= 360;
+    if (dCam < -180) dCam += 360;
+    camYaw = ((a.camYaw + dCam * f) % 360 + 360) % 360;
+  } else if (a.camYaw != null) {
+    camYaw = a.camYaw;
+  }
+
+  let cameraAz = null;
+  if (a.cameraAz != null && b.cameraAz != null) {
+    let dAz = b.cameraAz - a.cameraAz;
+    if (dAz > 180) dAz -= 360;
+    if (dAz < -180) dAz += 360;
+    cameraAz = ((a.cameraAz + dAz * f) % 360 + 360) % 360;
+  } else if (a.cameraAz != null) {
+    cameraAz = a.cameraAz;
+  }
+
+  return {
+    t,
+    lat: lerp(a.lat, b.lat),
+    lon: lerp(a.lon, b.lon),
+    relAlt: lerp(a.relAlt, b.relAlt),
+    absAlt: lerp(a.absAlt, b.absAlt),
+    yaw: a.yaw + dyaw * f,
+    pitch: lerp(a.pitch, b.pitch),
+    iso: a.iso,
+    shutter: a.shutter,
+    fnum: a.fnum,
+    focalLen: a.focalLen,
+    timestamp: a.timestamp,
+    hSpeed: a.hSpeed ?? null,
+    camYaw,
+    cameraAz,
+    _raw: a._raw   // nearest real sample — not interpolated, used by debug panel
+  };
+}
+
+// ── Map layers ──
+function initFlightPath() {
+  const latLngs = telemetry.map(e => [e.lat, e.lon]);
+  fullPathLine = L.polyline(latLngs, { color: '#888', weight: 2, opacity: 0.8 }).addTo(map);
+  travelledPathLine = L.polyline([latLngs[0]], { color: '#ffa028', weight: 3, opacity: 0.85 }).addTo(map);
+  droneMarker.setLatLng(latLngs[0]).addTo(map);
+  droneMarker.getElement()?.style.setProperty('display', currentTelemetryPath !== PATH_TARGET_POS ? '' : 'none');
+  map.fitBounds(fullPathLine.getBounds(), { padding: [40, 40] });
+
+  // Switch from drop zone to HUD strip
+  document.getElementById('dropMp4').style.display = 'none';
+  document.getElementById('statusMsg').style.display = 'none';
+}
+
+// ── Speed calcs ──
+let lastVSpeed = 0;
+let lastHSpeed = 0;
+
+function calcSpeeds(s) {
+  // Horizontal speed: prefer direct velocity magnitude from telemetry (djmd f6.f4/f5)
+  if (s.hSpeed !== null && s.hSpeed !== undefined) lastHSpeed = s.hSpeed;
+
+  if (!prevAltSample || s.t === prevAltSample.t) {
+    prevAltSample = s;
+    return;
+  }
+  const dt = s.t - prevAltSample.t;
+  if (dt >= 0.3) {
+    // Vertical speed from altitude delta
+    lastVSpeed = (s.relAlt - prevAltSample.relAlt) / dt;
+
+    // Horizontal speed fallback: haversine (used when no direct velocity field)
+    if (s.hSpeed === null || s.hSpeed === undefined) {
+      const R = 6371000;
+      const dLat = (s.lat - prevAltSample.lat) * Math.PI / 180;
+      const dLon = (s.lon - prevAltSample.lon) * Math.PI / 180;
+      const lat1 = prevAltSample.lat * Math.PI / 180;
+      const lat2 = s.lat * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+      const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      lastHSpeed = dist / dt;
+    }
+
+    prevAltSample = s;
+  }
+}
+
+// ── Update loop ──
+function updateMap(t) {
+  const s = sampleAt(t);
+  if (!s) return;
+
+  const pos = [s.lat, s.lon];
+  if (currentTelemetryPath !== PATH_TARGET_POS) {
+    droneMarker.setLatLng(pos);
+    const svgEl = droneMarker.getElement()?.querySelector('.drone-svg');
+    if (svgEl) svgEl.style.transform = `rotate(${s.yaw}deg)`;
+  }
+
+  // Travelled path
+  let idx = 0;
+  let lo = 0, hi = telemetry.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (telemetry[mid].t <= t) { idx = mid; lo = mid + 1; } else { hi = mid - 1; }
+  }
+  const latLngs = telemetry.slice(0, idx + 1).map(e => [e.lat, e.lon]);
+  latLngs.push(pos);
+  travelledPathLine.setLatLngs(latLngs);
+
+  if (followDrone) {
+    map.setView(pos, map.getZoom(), { animate: false });
+  }
+
+  // Speeds
+  calcSpeeds(s);
+
+  // ── HUD strip update ──
+  // Time: split into clock (HH:MM:SS) and date
+  const ts = s.timestamp || '';
+  const tsParts = ts.split(' ');
+  if (tsParts.length >= 2) {
+    // timestamp format: "2026-03-30 12:04:17.554"
+    const timePart = tsParts[1].split('.')[0]; // "12:04:17"
+    document.getElementById('hudTimeClock').textContent = timePart;
+    document.getElementById('hudTimeDate').textContent = tsParts[0];
+  } else {
+    document.getElementById('hudTimeClock').textContent = ts || '--';
+    document.getElementById('hudTimeDate').textContent = '';
+  }
+
+  drawPitch(s.pitch);
+  document.getElementById('hudPitch').textContent = s.pitch.toFixed(1) + '\u00b0';
+
+  drawHeading(s.yaw);
+  document.getElementById('hudHeading').textContent = s.yaw.toFixed(1) + '\u00b0';
+
+  drawCompass(s.yaw);
+
+  document.getElementById('hudHSpeed').textContent = lastHSpeed.toFixed(1) + ' m/s';
+  const vsDisplay = Math.abs(lastVSpeed) < 0.05 ? '0.0' : lastVSpeed.toFixed(1);
+  document.getElementById('hudVSpeed').textContent = (lastVSpeed > 0.05 ? '+' : '') + vsDisplay + ' m/s';
+
+  document.getElementById('hudRelAlt').textContent = s.relAlt.toFixed(1) + ' m';
+  document.getElementById('hudAbsAlt').textContent = s.absAlt.toFixed(1) + ' m';
+
+  updateDebugPanel(s);
+}
+
+// ── Video events ──
+const video = document.getElementById('video');
+video.addEventListener('timeupdate', () => { if (telemetryReady) updateMap(video.currentTime); });
+video.addEventListener('seeked', () => { if (telemetryReady) { prevAltSample = null; lastVSpeed = 0; lastHSpeed = 0; updateMap(video.currentTime); } });
+
+// ── Custom video controls ──
+const vcbPlayPause = document.getElementById('vcbPlayPause');
+const vcbSeek      = document.getElementById('vcbSeek');
+const vcbSeekFill  = document.getElementById('vcbSeekFill');
+const vcbTime      = document.getElementById('vcbTime');
+
+function formatDur(s) {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+  return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
+}
+function updateCtrlBar() {
+  if (!video.duration) return;
+  vcbSeekFill.style.width = (video.currentTime / video.duration * 100).toFixed(2) + '%';
+  vcbTime.textContent = formatDur(video.currentTime) + ' / ' + formatDur(video.duration);
+}
+video.addEventListener('timeupdate', updateCtrlBar);
+video.addEventListener('play',  () => { vcbPlayPause.innerHTML = '&#9646;&#9646;'; });
+video.addEventListener('pause', () => { vcbPlayPause.innerHTML = '&#9654;'; });
+vcbPlayPause.addEventListener('click', () => { video.paused ? video.play() : video.pause(); });
+video.addEventListener('click', () => { if (video.src) { video.paused ? video.play() : video.pause(); } });
+
+let vcbDragging = false;
+function vcbSeekTo(e) {
+  const r = vcbSeek.getBoundingClientRect();
+  video.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * video.duration;
+}
+vcbSeek.addEventListener('mousedown', e => { vcbDragging = true; vcbSeekTo(e); });
+document.addEventListener('mousemove', e => { if (vcbDragging) vcbSeekTo(e); });
+document.addEventListener('mouseup',   () => { vcbDragging = false; });
+
+// ── Keyboard controls ──
+document.addEventListener('keydown', e => {
+  if (!video.src) return;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    video.paused ? video.play() : video.pause();
+  } else if (e.code === 'ArrowLeft') {
+    e.preventDefault();
+    video.currentTime = Math.max(0, video.currentTime - 10);
+  } else if (e.code === 'ArrowRight') {
+    e.preventDefault();
+    video.currentTime = Math.min(video.duration, video.currentTime + 10);
+  }
+});
+
+// ── File loading ──
+const dropZone = document.getElementById('dropMp4');
+const fileInput = dropZone.querySelector('input');
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) handleDroppedFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', e => {
+  if (e.target.files.length) handleDroppedFiles(e.target.files);
+});
+
+function handleDroppedFiles(fileList) {
+  const files = Array.from(fileList);
+  const mp4File = files.find(f => /\.mp4$/i.test(f.name));
+  const srtFile = files.find(f => /\.srt$/i.test(f.name));
+
+  if (mp4File && srtFile) {
+    loadWithSRT(mp4File, srtFile);
+  } else if (srtFile && !mp4File) {
+    loadWithSRT(null, srtFile);
+  } else if (mp4File) {
+    loadMp4(mp4File);
+  }
+}
+
+async function loadWithSRT(mp4File, srtFile) {
+  debugOpen = false;
+  document.getElementById('debugToggleBtn').classList.remove('active');
+  document.getElementById('debugToggleBtn').style.display = 'none';
+  document.getElementById('debugPanel').classList.remove('open');
+
+  const statusMsg = document.getElementById('statusMsg');
+  statusMsg.style.display = 'block';
+  statusMsg.classList.remove('error');
+  statusMsg.textContent = 'Parsing SRT telemetry...';
+
+  currentBasename = srtFile.name.replace(/\.[^.]+$/, '');
+
+  if (mp4File) {
+    video.src = URL.createObjectURL(mp4File);
+    video.style.display = 'block';
+  }
+
+  dropZone.classList.add('loaded');
+  dropZone.querySelector('h3').textContent = mp4File ? mp4File.name : srtFile.name;
+  dropZone.querySelector('p').textContent = 'Parsing SRT...';
+
+  try {
+    const srtText = await srtFile.text();
+    currentTelemetryPath = PATH_SRT_FILE;
+    telemetry = parseSRT(srtText);
+    if (telemetry.length === 0) {
+      statusMsg.classList.add('error');
+      statusMsg.textContent = 'No telemetry found in SRT';
+      dropZone.querySelector('p').textContent = 'No valid coordinates in SRT file';
+      return;
+    }
+    telemetryReady = true;
+    dropZone.querySelector('p').textContent = telemetry.length + ' telemetry frames from SRT';
+    initFlightPath();
+    if (mp4File) {
+      document.getElementById('videoCtrlBar').style.display = 'flex';
+      video.play();
+    }
+    map.invalidateSize();
+    checkMapVisible();
+  } catch (err) {
+    statusMsg.classList.add('error');
+    statusMsg.textContent = 'Error: ' + err.message;
+    dropZone.querySelector('p').textContent = 'SRT parsing failed';
+    console.error(err);
+  }
+}
+
+async function loadMp4(file) {
+  // Reset debug state for new file
+  debugOpen = false;
+  document.getElementById('debugToggleBtn').classList.remove('active');
+  document.getElementById('debugToggleBtn').style.display = 'none';
+  document.getElementById('debugPanel').classList.remove('open');
+
+  const statusMsg = document.getElementById('statusMsg');
+  statusMsg.style.display = 'block';
+  statusMsg.classList.remove('error');
+  statusMsg.textContent = 'Loading video...';
+
+  // Strip extension to get the basename used for per-flight data files
+  // (e.g. dem/visibility/<basename>.{bin,json}).
+  currentBasename = file.name.replace(/\.[^.]+$/, '');
+
+  video.src = URL.createObjectURL(file);
+  video.style.display = 'block';
+
+  dropZone.classList.add('loaded');
+  dropZone.querySelector('h3').textContent = file.name;
+  dropZone.querySelector('p').textContent = 'Extracting telemetry...';
+
+  try {
+    telemetry = await extractTelemetryFromMp4(file);
+    if (telemetry.length === 0) {
+      statusMsg.classList.add('error');
+      statusMsg.textContent = 'No telemetry found in MP4';
+      dropZone.querySelector('p').textContent = 'No telemetry track found';
+      return;
+    }
+    telemetryReady = true;
+    dropZone.querySelector('p').textContent = telemetry.length + ' telemetry frames loaded';
+    initFlightPath();
+    document.getElementById('videoCtrlBar').style.display = 'flex';
+    // Show RAW debug button only for djmd (protobuf) files
+    if (telemetry[0]?._raw) document.getElementById('debugToggleBtn').style.display = 'block';
+    map.invalidateSize();
+    checkMapVisible();
+    video.play();
+  } catch (err) {
+    statusMsg.classList.add('error');
+    statusMsg.textContent = 'Error: ' + err.message;
+    dropZone.querySelector('p').textContent = 'Telemetry extraction failed';
+    console.error(err);
+  }
+}
+
+
+// ── Map-below-fold hint ──
+(function() {
+  const mapPanel = document.querySelector('.map-panel');
+  const mapHint = document.getElementById('mapHint');
+  checkMapVisible = function() {
+    const rect = mapPanel.getBoundingClientRect();
+    const visible = rect.top < window.innerHeight - 40;
+    mapHint.style.display = visible ? 'none' : 'flex';
+  };
+  checkMapVisible();
+  window.addEventListener('resize', checkMapVisible);
+  window.addEventListener('scroll', checkMapVisible);
+})();
+
+// ── Raw telemetry debug panel ──
+// Known field labels — ✓ = confirmed, ? = unknown
+const DJMD_META = {
+  1: { name: 'f1',      fields: {} },
+  6: { name: 'posVel',  fields: { 2:'?', 3:'frame#', 4:'vel-N m/s ✓', 5:'vel-E m/s ✓', 6:'absAlt mm ÷1000=m ✓', 8:'?' } },
+  7: { name: 'flight',  fields: { 2:'clock', 3:'frame#', 4:'roll? °', 5:'pitch ° ✓', 7:'?', 8:'?', 9:'camAz ÷100° ✓?', 10:'?' } },
+  8: { name: 'state',   fields: { 2:'clock', 3:'frame#', 5:'?', 6:'heading° ✓', 8:'?' } },
+  9: { name: 'gps',     fields: { 2:'clock', 3:'frame#', 4:'?', 5:'relAlt mm ÷1000=m ✓', 6:'lon° ✓', 7:'lat° ✓', 8:'?', 9:'?', 10:'?', 12:'?', 13:'?', 14:'?', 15:'?', 16:'?', 17:'?', 18:'?', 19:'?', 20:'?' } },
+};
+// Fields highlighted as "currently used" in the HUD
+const DJMD_USED = new Set(['6.4','6.5','6.6','7.5','7.9','8.6','9.5','9.6','9.7']);
+
+const debugToggleBtn = document.getElementById('debugToggleBtn');
+const debugPanel = document.getElementById('debugPanel');
+
+debugToggleBtn.addEventListener('click', () => {
+  debugOpen = !debugOpen;
+  debugToggleBtn.classList.toggle('active', debugOpen);
+  debugPanel.classList.toggle('open', debugOpen);
+});
+
+function updateDebugPanel(s) {
+  if (!debugOpen || !s._raw) return;
+  const raw = s._raw;
+  let html = `<div class="debug-time">t&nbsp;=&nbsp;${s.t.toFixed(3)}&nbsp;s</div>`;
+  for (const outerKey of Object.keys(raw).sort((a, b) => +a - +b)) {
+    const val = raw[outerKey];
+    const meta = DJMD_META[outerKey] || { name: `f${outerKey}`, fields: {} };
+    if (typeof val === 'object' && val !== null) {
+      html += `<div class="debug-grp"><div class="debug-grp-title">[f${outerKey}]&nbsp;${meta.name}</div>`;
+      for (const innerKey of Object.keys(val).sort((a, b) => +a - +b)) {
+        const iv = val[innerKey];
+        const label = meta.fields[innerKey] || '?';
+        const used  = DJMD_USED.has(`${outerKey}.${innerKey}`);
+        const fmt   = Number.isInteger(iv) ? iv : iv.toFixed(7);
+        html += `<div class="debug-row${used ? ' used' : ''}">` +
+          `<span class="dk">.f${innerKey}</span>` +
+          `<span class="dv">${fmt}</span>` +
+          `<span class="di">${label}</span></div>`;
+      }
+      html += `</div>`;
+    } else {
+      html += `<div class="debug-grp"><div class="debug-row">` +
+        `<span class="dk">f${outerKey}</span><span class="dv">${val}</span></div></div>`;
+    }
+  }
+  debugPanel.innerHTML = html;
+}
+
+// ── DEM Loading & Camera Footprint ──
+let dem = null;
+let demLoadPromise = null;
+let footprintLayer    = null;   // ellipse polygon
+let footprintRayLayer = null;   // principal-ray polyline
+let heatmapOverlay = null;
+let footprintEnabled = true;
+let heatmapEnabled = false;
+let heatmapAvailable = false;
+let currentBasename = null;
+let currentFlightDemCoverage = null;
+
+const FOOTPRINT_MODE_FLAT = 'flat';
+const FOOTPRINT_MODE_DEM = 'dem';
+let footprintMode = FOOTPRINT_MODE_FLAT;
+
+// Open ellipse — outline only, no fill
+const FLAT_FOOTPRINT_STYLE = {
+  color: '#ffa028',
+  weight: 1.5,
+  opacity: 0.90,
+  dashArray: '7 5',
+  fillOpacity: 0,
+  interactive: false
+};
+
+const DEM_FOOTPRINT_STYLE = {
+  color: '#ffa028',
+  weight: 1.5,
+  opacity: 0.75,
+  fillOpacity: 0,
+  interactive: false
+};
+
+// Principal-ray line: thin dashed from aircraft to ellipse centre
+const RAY_STYLE = {
+  color: '#ffa028',
+  weight: 1,
+  opacity: 0.55,
+  dashArray: '3 6',
+  interactive: false
+};
+
+// Camera specs — derived from sensor geometry
+const SENSOR_W = 9.6, SENSOR_H = 7.2; // mm
+const SENSOR_DIAG = Math.sqrt(SENSOR_W * SENSOR_W + SENSOR_H * SENSOR_H);
+const CROP_FACTOR = 43.27 / SENSOR_DIAG;
+
+function getCameraFOV(equivFocalLen) {
+  const actualFL = equivFocalLen / CROP_FACTOR;
+  const hFov = 2 * Math.atan(SENSOR_W / (2 * actualFL));
+  const vFov = 2 * Math.atan(SENSOR_H / (2 * actualFL));
+  return { hFov, vFov }; // radians
+}
+
+function getFootprintStyle() {
+  return footprintMode === FOOTPRINT_MODE_DEM ? DEM_FOOTPRINT_STYLE : FLAT_FOOTPRINT_STYLE;
+}
+
+function isPointInsideDemBounds(lat, lon) {
+  return Number.isFinite(getElevation(lat, lon));
+}
+
+function summarizeDemCoverage() {
+  if (!dem || !telemetry.length) return null;
+
+  let insideCount = 0;
+  for (const sample of telemetry) {
+    if (isPointInsideDemBounds(sample.lat, sample.lon)) insideCount++;
+  }
+
+  return {
+    insideCount,
+    totalCount: telemetry.length,
+    hasCoverage: insideCount > 0,
+    coversEntireFlight: insideCount === telemetry.length
+  };
+}
+
+function refreshDemCoverageState() {
+  currentFlightDemCoverage = summarizeDemCoverage();
+}
+
+function refreshOverlayUi() {
+  const footprintLabelText = document.getElementById('footprintLabelText');
+  const footprintNote = document.getElementById('footprintNote');
+  const footprintBadge = document.getElementById('footprintBadge');
+  const heatmapCheckbox = document.getElementById('chkHeatmap');
+  const heatmapLabel = document.getElementById('heatmapLabelText');
+  const heatmapControlLabel = document.getElementById('heatmapControlLabel');
+  const heatmapOpacity = document.getElementById('heatmapOpacity');
+  const heatmapOpacityRow = document.getElementById('heatmapOpacityRow');
+
+  const demLoaded = !!dem;
+  const demCoverage = currentFlightDemCoverage;
+  const demRelevant = !!demCoverage?.hasCoverage;
+  const demPartial = demRelevant && !demCoverage.coversEntireFlight;
+
+  if (footprintMode === FOOTPRINT_MODE_DEM) {
+    footprintLabelText.textContent = 'Camera footprint (terrain-aware)';
+    footprintNote.textContent = demPartial
+      ? 'Ray-cast against the loaded DEM while the aircraft is inside DEM coverage; otherwise falls back to flat-ground estimation.'
+      : 'Ray-cast against the loaded DEM for terrain-aware ground intersections.';
+    footprintBadge.innerHTML = demPartial
+      ? '<strong>Terrain-aware footprint</strong><small>Using DEM where this flight overlaps it</small>'
+      : '<strong>Terrain-aware footprint</strong><small>Ray-cast against loaded DEM terrain</small>';
+  } else {
+    footprintLabelText.textContent = 'Estimated footprint (flat ground)';
+    if (demLoaded && demCoverage && !demRelevant) {
+      footprintNote.textContent = 'A DEM is loaded, but it does not cover this flight location, so the viewer is staying in flat-ground mode.';
+      footprintBadge.innerHTML = '<strong>Estimated footprint</strong><small>Loaded DEM does not cover this flight</small>';
+    } else if (demLoaded && demPartial) {
+      footprintNote.textContent = 'This flight only partly overlaps the loaded DEM. The footprint switches to terrain-aware mode only while inside DEM coverage.';
+      footprintBadge.innerHTML = '<strong>Estimated footprint</strong><small>Outside DEM coverage for this frame</small>';
+    } else {
+      footprintNote.textContent = 'Using rel altitude on a flat-ground assumption. Load a DEM over HTTP for terrain-aware intersections.';
+      footprintBadge.innerHTML = '<strong>Estimated footprint</strong><small>Flat-ground assumption from rel altitude</small>';
+    }
+  }
+
+  if (telemetryReady && footprintEnabled) footprintBadge.style.display = 'block';
+  else footprintBadge.style.display = 'none';
+
+  heatmapCheckbox.disabled = !heatmapAvailable;
+  heatmapOpacity.disabled = !heatmapAvailable;
+  heatmapControlLabel.classList.toggle('is-disabled', !heatmapAvailable);
+  heatmapOpacityRow.classList.toggle('is-disabled', !heatmapAvailable);
+  heatmapLabel.textContent = heatmapAvailable
+    ? 'Visibility heatmap'
+    : 'Visibility heatmap (needs DEM files over HTTP)';
+}
+
+function setFootprintMode(mode) {
+  if (footprintMode === mode) return;
+  footprintMode = mode;
+  if (footprintLayer) footprintLayer.setStyle(getFootprintStyle());
+  refreshOverlayUi();
+}
+
+function setHeatmapAvailable(available) {
+  heatmapAvailable = available;
+  if (!available) {
+    heatmapEnabled = false;
+    document.getElementById('chkHeatmap').checked = false;
+    if (heatmapOverlay) map.removeLayer(heatmapOverlay);
+  }
+  refreshOverlayUi();
+}
+
+async function loadDEM() {
+  // Shared across all flights — only fetch once.
+  if (dem) {
+    refreshDemCoverageState();
+    setFootprintMode(currentFlightDemCoverage?.hasCoverage ? FOOTPRINT_MODE_DEM : FOOTPRINT_MODE_FLAT);
+    if (telemetryReady) updateMap(video.currentTime);
+    return dem;
+  }
+  if (demLoadPromise) return demLoadPromise;
+  demLoadPromise = (async () => {
+    try {
+      const metaResp = await fetch('dem/flight-dem.json');
+      if (!metaResp.ok) {
+        console.log('[DEM] flight-dem.json not found, using flat-ground footprint estimate');
+        setFootprintMode(FOOTPRINT_MODE_FLAT);
+        return null;
+      }
+      const meta = await metaResp.json();
+      const binResp = await fetch('dem/flight-dem.bin');
+      if (!binResp.ok) {
+        console.log('[DEM] flight-dem.bin not found, using flat-ground footprint estimate');
+        setFootprintMode(FOOTPRINT_MODE_FLAT);
+        return null;
+      }
+      const buf = await binResp.arrayBuffer();
+      const elevations = new Float32Array(buf);
+      dem = { ...meta, elevations };
+      refreshDemCoverageState();
+      console.log('[DEM] Loaded:', meta.width, 'x', meta.height, '(' + elevations.length + ' cells)');
+      if (telemetryReady && currentFlightDemCoverage && !currentFlightDemCoverage.hasCoverage) {
+        console.log('[DEM] Loaded, but this flight does not overlap DEM coverage; staying in flat-ground mode');
+      }
+      setFootprintMode(currentFlightDemCoverage?.hasCoverage ? FOOTPRINT_MODE_DEM : FOOTPRINT_MODE_FLAT);
+      if (telemetryReady) updateMap(video.currentTime);
+      return dem;
+    } catch (e) {
+      console.log('[DEM] Could not load DEM files:', e.message);
+      setFootprintMode(FOOTPRINT_MODE_FLAT);
+      return null;
+    }
+  })();
+  return demLoadPromise;
+}
+
+function getElevation(lat, lon) {
+  if (!dem) return NaN;
+  const col = (lon - dem.bounds.west) / dem.pixel_size_lon;
+  const row = (dem.bounds.north - lat) / dem.pixel_size_lat;
+  const c0 = Math.floor(col), r0 = Math.floor(row);
+  const c1 = c0 + 1, r1 = r0 + 1;
+  // Return NaN outside DEM coverage so callers can distinguish
+  // "we don't know the terrain here" from "terrain is at 0 m".
+  if (c0 < 0 || r0 < 0 || c1 >= dem.width || r1 >= dem.height) return NaN;
+  const fc = col - c0, fr = row - r0;
+  const v00 = dem.elevations[r0 * dem.width + c0];
+  const v01 = dem.elevations[r0 * dem.width + c1];
+  const v10 = dem.elevations[r1 * dem.width + c0];
+  const v11 = dem.elevations[r1 * dem.width + c1];
+  const top = v00 + (v01 - v00) * fc;
+  const bot = v10 + (v11 - v10) * fc;
+  return top + (bot - top) * fr;
+}
+
+// ── Boresight centre-point & ellipse helpers ──
+
+// Returns { lat, lon, range } — the point where the camera principal ray hits the ground
+// (terrain if DEM loaded, flat-earth otherwise).  Returns null if no valid intersection.
+function computeBoresightPoint(lat, lon, absAlt, relAlt, yawDeg, pitchDeg) {
+  const DEG2RAD = Math.PI / 180;
+  const yaw   = yawDeg   * DEG2RAD;
+  const pitch = pitchDeg * DEG2RAD;
+  const M_LAT = 111320;
+  const M_LON = 111320 * Math.cos(lat * DEG2RAD);
+  const lookE = Math.sin(yaw) * Math.cos(pitch);
+  const lookN = Math.cos(yaw) * Math.cos(pitch);
+  const lookU = Math.sin(pitch);
+
+  const useDem = Number.isFinite(getElevation(lat, lon));
+  const H = useDem ? absAlt : relAlt;
+  if (!Number.isFinite(H) || H <= 0) return null;
+
+  const MAX_RANGE = 5000;
+  let range;
+
+  if (lookU >= -0.01) {
+    // Camera looking up or nearly horizontal — pin at MAX_RANGE for display
+    range = MAX_RANGE;
+  } else if (useDem) {
+    const STEP = 20;
+    range = MAX_RANGE;
+    for (let s = 1; s * STEP <= MAX_RANGE; s++) {
+      const d = s * STEP;
+      const elev = getElevation(lat + lookN * d / M_LAT, lon + lookE * d / M_LON);
+      if (Number.isNaN(elev)) break;
+      if (absAlt + lookU * d <= elev) { range = d; break; }
+    }
+  } else {
+    range = Math.min(H / (-lookU), MAX_RANGE);
+  }
+
+  return {
+    lat:   lat + lookN * range / M_LAT,
+    lon:   lon + lookE * range / M_LON,
+    range
+  };
+}
+
+// Returns a closed ring of [lat,lon] points forming an ellipse.
+// semiAlong = half-axis in the heading direction (m); semiCross = half-axis perpendicular (m).
+function ellipseLatLngs(centerLat, centerLon, semiAlong, semiCross, azimuthDeg, N) {
+  N = N || 48;
+  const M_LAT = 111320;
+  const M_LON = 111320 * Math.cos(centerLat * Math.PI / 180);
+  const az  = azimuthDeg * Math.PI / 180;
+  const sinA = Math.sin(az), cosA = Math.cos(az);
+  const pts = [];
+  for (let i = 0; i < N; i++) {
+    const theta  = (2 * Math.PI * i) / N;
+    const along  = semiAlong * Math.cos(theta);
+    const across = semiCross * Math.sin(theta);
+    // Rotate from (along-track, cross-track) into ENU
+    const localE = along * sinA + across * cosA;
+    const localN = along * cosA - across * sinA;
+    pts.push([centerLat + localN / M_LAT, centerLon + localE / M_LON]);
+  }
+  return pts;
+}
+
+function buildFootprintRays(lat, yawDeg, pitchDeg, hFov, vFov) {
+  const DEG2RAD = Math.PI / 180;
+  const yaw = yawDeg * DEG2RAD;
+  const pitch = pitchDeg * DEG2RAD;
+  const M_PER_DEG_LAT = 111320;
+  const M_PER_DEG_LON = 111320 * Math.cos(lat * DEG2RAD);
+
+  // Camera look direction (ENU)
+  const lookE = Math.sin(yaw) * Math.cos(pitch);
+  const lookN = Math.cos(yaw) * Math.cos(pitch);
+  const lookU = Math.sin(pitch);
+
+  // Right vector (horizontal)
+  const rightE = Math.cos(yaw);
+  const rightN = -Math.sin(yaw);
+  const rightU = 0;
+
+  // Up vector = right x look
+  let upE = rightN * lookU - rightU * lookN;
+  let upN = rightU * lookE - rightE * lookU;
+  let upU = rightE * lookN - rightN * lookE;
+  const upNorm = Math.sqrt(upE * upE + upN * upN + upU * upU);
+  if (upNorm > 1e-10) { upE /= upNorm; upN /= upNorm; upU /= upNorm; }
+
+  const hHalf = Math.tan(hFov / 2);
+  const vHalf = Math.tan(vFov / 2);
+
+  // Sample edge points: 4 corners + intermediates along each edge
+  const edgePoints = [];
+  const N = 6; // points per edge
+  // Bottom edge (v = -1)
+  for (let i = 0; i <= N; i++) edgePoints.push([i / N * 2 - 1, -1]);
+  // Right edge (u = 1)
+  for (let i = 1; i <= N; i++) edgePoints.push([1, i / N * 2 - 1]);
+  // Top edge (v = 1), reversed
+  for (let i = N - 1; i >= 0; i--) edgePoints.push([i / N * 2 - 1, 1]);
+  // Left edge (u = -1), reversed
+  for (let i = N - 1; i >= 1; i--) edgePoints.push([-1, i / N * 2 - 1]);
+
+  const rays = [];
+  for (const [u, v] of edgePoints) {
+    // Ray direction
+    let dE = lookE + u * hHalf * rightE + v * vHalf * upE;
+    let dN = lookN + u * hHalf * rightN + v * vHalf * upN;
+    let dU = lookU + u * hHalf * rightU + v * vHalf * upU;
+    const norm = Math.sqrt(dE * dE + dN * dN + dU * dU);
+    dE /= norm; dN /= norm; dU /= norm;
+    rays.push({ dE, dN, dU });
+  }
+
+  return { M_PER_DEG_LAT, M_PER_DEG_LON, rays };
+}
+
+function pushProjectedPoint(polygon, lat, lon, dE, dN, M_PER_DEG_LAT, M_PER_DEG_LON, horizontalDist) {
+  const hNorm = Math.sqrt(dE * dE + dN * dN);
+  if (hNorm < 1e-6) {
+    polygon.push([lat, lon]);
+    return;
+  }
+  const scale = horizontalDist / hNorm;
+  const pLat = lat + (dN * scale) / M_PER_DEG_LAT;
+  const pLon = lon + (dE * scale) / M_PER_DEG_LON;
+  polygon.push([pLat, pLon]);
+}
+
+function computeTerrainFootprint(lat, lon, absAlt, yawDeg, pitchDeg, hFov, vFov) {
+  const { M_PER_DEG_LAT, M_PER_DEG_LON, rays } = buildFootprintRays(lat, yawDeg, pitchDeg, hFov, vFov);
+  const polygon = [];
+  const MAX_RANGE = 20000;     // march this far looking for a terrain hit
+  const COARSE_STEP = 20;      // coarse pass — find approximate intersection
+  const FINE_STEP = 2;         // refine around the coarse hit, matches DEM resolution
+  const HORIZON_DIST = 50000;  // for rays that never hit terrain, project this far
+                               // so the polygon reaches effectively "infinite" range
+
+  for (const { dE, dN, dU } of rays) {
+    const hNorm = Math.sqrt(dE * dE + dN * dN);
+
+    const projectToHorizon = () => {
+      pushProjectedPoint(polygon, lat, lon, dE, dN, M_PER_DEG_LAT, M_PER_DEG_LON, HORIZON_DIST);
+    };
+
+    // Rays pointing above horizontal never hit the ground — extend to the horizon.
+    if (dU > 0.001) { projectToHorizon(); continue; }
+
+    // Coarse march: find the first step where the ray dips to or below the DEM.
+    let coarseHit = -1;
+    for (let s = 1; s * COARSE_STEP <= MAX_RANGE; s++) {
+      const dist = s * COARSE_STEP;
+      const pU = absAlt + dU * dist;
+      const pLat = lat + (dN * dist) / M_PER_DEG_LAT;
+      const pLon = lon + (dE * dist) / M_PER_DEG_LON;
+      const demZ = getElevation(pLat, pLon);
+      if (Number.isNaN(demZ)) break;  // exited DEM coverage — treat as no hit
+      if (pU <= demZ) { coarseHit = s; break; }
+    }
+
+    let hit = null;
+    if (coarseHit > 0) {
+      // Refine between (coarseHit-1)*COARSE_STEP and coarseHit*COARSE_STEP.
+      const startDist = Math.max((coarseHit - 1) * COARSE_STEP, 1);
+      const endDist = coarseHit * COARSE_STEP;
+      for (let d = startDist; d <= endDist; d += FINE_STEP) {
+        const pU = absAlt + dU * d;
+        const pLat = lat + (dN * d) / M_PER_DEG_LAT;
+        const pLon = lon + (dE * d) / M_PER_DEG_LON;
+        const demZ = getElevation(pLat, pLon);
+        if (Number.isNaN(demZ)) break;
+        if (pU <= demZ) { hit = [pLat, pLon]; break; }
+      }
+    }
+
+    if (hit) polygon.push(hit);
+    else projectToHorizon();
+  }
+  return polygon;
+}
+
+function computeFlatFootprint(lat, lon, relAlt, yawDeg, pitchDeg, hFov, vFov) {
+  if (!Number.isFinite(relAlt) || relAlt <= 0) return [];
+
+  const { M_PER_DEG_LAT, M_PER_DEG_LON, rays } = buildFootprintRays(lat, yawDeg, pitchDeg, hFov, vFov);
+  const polygon = [];
+  const HORIZON_DIST = 50000;
+
+  for (const { dE, dN, dU } of rays) {
+    const hNorm = Math.sqrt(dE * dE + dN * dN);
+    if (dU >= -0.001) {
+      pushProjectedPoint(polygon, lat, lon, dE, dN, M_PER_DEG_LAT, M_PER_DEG_LON, HORIZON_DIST);
+      continue;
+    }
+
+    const rayDist = relAlt / -dU;
+    const horizontalDist = Math.min(rayDist * hNorm, HORIZON_DIST);
+    pushProjectedPoint(polygon, lat, lon, dE, dN, M_PER_DEG_LAT, M_PER_DEG_LON, horizontalDist);
+  }
+
+  return polygon;
+}
+
+// ── Visibility Heatmap Layer ──
+async function loadHeatmap(basename) {
+  // Tear down any previous flight's heatmap before loading a new one.
+  if (heatmapOverlay) {
+    map.removeLayer(heatmapOverlay);
+    heatmapOverlay = null;
+  }
+  setHeatmapAvailable(false);
+  if (!basename) { console.log('[Heatmap] No basename — skipping'); return; }
+  try {
+    const jsonUrl = `dem/visibility/${encodeURIComponent(basename)}.json`;
+    const binUrl  = `dem/visibility/${encodeURIComponent(basename)}.bin`;
+    const metaResp = await fetch(jsonUrl);
+    if (!metaResp.ok) { console.log(`[Heatmap] ${jsonUrl} not found — run compute_visibility.py --name "${basename}"`); return; }
+    const meta = await metaResp.json();
+    const binResp = await fetch(binUrl);
+    if (!binResp.ok) { console.log(`[Heatmap] ${binUrl} not found`); return; }
+    const buf = await binResp.arrayBuffer();
+    const scores = new Float32Array(buf);
+
+    // Create colour-ramped canvas
+    const canvas = document.createElement('canvas');
+    canvas.width = meta.width;
+    canvas.height = meta.height;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(meta.width, meta.height);
+
+    // Find max for normalisation (use log scale)
+    let maxLog = 0;
+    for (let i = 0; i < scores.length; i++) {
+      if (scores[i] > 0) {
+        const lv = Math.log(scores[i] + 1);
+        if (lv > maxLog) maxLog = lv;
+      }
+    }
+
+    // Colour ramp: transparent -> dark cyan -> cyan -> white
+    for (let i = 0; i < scores.length; i++) {
+      const px = i * 4;
+      if (scores[i] <= 0) {
+        img.data[px] = 0; img.data[px + 1] = 0; img.data[px + 2] = 0; img.data[px + 3] = 0;
+        continue;
+      }
+      const t = Math.log(scores[i] + 1) / maxLog; // 0..1
+      let r, g, b, a;
+      if (t < 0.33) {
+        // Dark cyan to mid cyan
+        const f = t / 0.33;
+        r = 0;
+        g = Math.round(120 + 55 * f);
+        b = Math.round(120 + 55 * f);
+        a = Math.min(255, Math.round(200 + 160 * f));
+      } else if (t < 0.66) {
+        // Mid cyan to bright cyan
+        const f = (t - 0.33) / 0.33;
+        r = 0;
+        g = Math.round(175 + 80 * f);
+        b = Math.round(175 + 80 * f);
+        a = Math.min(255, Math.round(360 + 80 * f));
+      } else {
+        // Bright cyan to white
+        const f = (t - 0.66) / 0.34;
+        r = Math.round(0 + 255 * f);
+        g = 255;
+        b = 255;
+        a = Math.min(255, Math.round(440 + 70 * f));
+      }
+      img.data[px] = r; img.data[px + 1] = g; img.data[px + 2] = b; img.data[px + 3] = a;
+    }
+    ctx.putImageData(img, 0, 0);
+
+    const bounds = [[meta.bounds.south, meta.bounds.west], [meta.bounds.north, meta.bounds.east]];
+    heatmapOverlay = L.imageOverlay(canvas.toDataURL(), bounds, { opacity: 1.0, interactive: false });
+
+    console.log('[Heatmap] Loaded:', meta.width, 'x', meta.height, ', max_score:', meta.max_score);
+    setHeatmapAvailable(true);
+    // Show if checkbox is checked
+    if (heatmapEnabled) heatmapOverlay.addTo(map);
+  } catch (e) {
+    console.log('[Heatmap] Could not load visibility files:', e.message);
+    setHeatmapAvailable(false);
+  }
+}
+
+// ── Gear / settings panel (Leaflet custom control) ──
+const GearControl = L.Control.extend({
+  options: { position: 'topleft' },
+  onAdd() {
+    const bar = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+    bar.style.cssText = 'position:relative';
+
+    const btn = L.DomUtil.create('a', 'gear-leaflet-btn', bar);
+    btn.title = 'Settings';
+    btn.href = '#';
+    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path d="M10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm7.07-2.13a7.1 7.1 0 0 0 .07-.87 7.1 7.1 0 0 0-.07-.87l1.88-1.47a.45.45 0 0 0 .11-.57l-1.78-3.08a.45.45 0 0 0-.55-.2l-2.22.89a6.6 6.6 0 0 0-1.5-.87l-.34-2.36A.44.44 0 0 0 12.24 2H7.76a.44.44 0 0 0-.44.37l-.34 2.36a6.6 6.6 0 0 0-1.5.87l-2.22-.89a.44.44 0 0 0-.55.2L.93 7.99a.44.44 0 0 0 .11.57l1.88 1.47a7.2 7.2 0 0 0 0 1.74L1.04 13.24a.44.44 0 0 0-.11.57l1.78 3.08c.11.2.35.27.55.2l2.22-.89c.47.34.97.62 1.5.87l.34 2.36c.05.22.24.37.44.37h4.48c.2 0 .39-.15.44-.37l.34-2.36a6.6 6.6 0 0 0 1.5-.87l2.22.89c.2.08.44 0 .55-.2l1.78-3.08a.44.44 0 0 0-.11-.57l-1.88-1.47z"/></svg>`;
+
+    const panel = L.DomUtil.create('div', 'hud-settings-panel', bar);
+    panel.id = 'settingsPanel';
+    const exportBtn = L.DomUtil.create('button', 'export-btn', panel);
+    exportBtn.id = 'exportBtn';
+    exportBtn.textContent = 'Export telemetry JSON';
+    exportBtn.addEventListener('click', () => {
+      if (!telemetry.length) return;
+      const url = URL.createObjectURL(new Blob([JSON.stringify(telemetry, null, 2)], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = (currentBasename || 'flight') + '-telemetry.json';
+      a.click(); URL.revokeObjectURL(url);
+    });
+
+    L.DomEvent.on(btn, 'click', (e) => {
+      L.DomEvent.preventDefault(e);
+      L.DomEvent.stopPropagation(e);
+      panel.classList.toggle('open');
+    });
+    L.DomEvent.disableClickPropagation(bar);
+
+    bar.style.display = 'none';
+    this._container = bar;
+    return bar;
+  }
+});
+const gearControl = new GearControl().addTo(map);
+
+document.addEventListener('click', () => {
+  document.getElementById('settingsPanel')?.classList.remove('open');
+});
+
+// ── Controls wiring ──
+document.getElementById('chkFootprint').addEventListener('change', function() {
+  footprintEnabled = this.checked;
+  if (!footprintEnabled) {
+    if (footprintLayer)    footprintLayer.setLatLngs([]);
+    if (footprintRayLayer) footprintRayLayer.setLatLngs([]);
+  }
+  refreshOverlayUi();
+});
+document.getElementById('chkHeatmap').addEventListener('change', function() {
+  heatmapEnabled = this.checked;
+  if (heatmapOverlay) {
+    if (heatmapEnabled) heatmapOverlay.addTo(map);
+    else map.removeLayer(heatmapOverlay);
+  }
+  refreshOverlayUi();
+});
+document.getElementById('heatmapOpacity').addEventListener('input', function() {
+  if (heatmapOverlay) heatmapOverlay.setOpacity(this.value / 100);
+});
+
+// ── Hook footprint into updateMap ──
+const _origUpdateMap = updateMap;
+updateMap = function(t) {
+  _origUpdateMap(t);
+
+  // Helper: update-or-create a Leaflet layer
+  function syncPolyline(layer, latlngs, style) {
+    if (!layer) return L.polyline(latlngs, style).addTo(map);
+    layer.setLatLngs(latlngs); return layer;
+  }
+  function syncPolygon(layer, latlngs, style) {
+    if (!layer) return L.polygon(latlngs, style).addTo(map);
+    layer.setLatLngs(latlngs); layer.setStyle(style); return layer;
+  }
+
+  if (!footprintEnabled) {
+    if (footprintLayer)    footprintLayer.setLatLngs([]);
+    if (footprintRayLayer) footprintRayLayer.setLatLngs([]);
+    return;
+  }
+
+  const s = sampleAt(t);
+  if (!s) return;
+
+  const fl = parseFloat(s.focalLen) || 24;
+  const { hFov, vFov } = getCameraFOV(fl);
+  const useDem = isPointInsideDemBounds(s.lat, s.lon);
+  setFootprintMode(useDem ? FOOTPRINT_MODE_DEM : FOOTPRINT_MODE_FLAT);
+  const style = getFootprintStyle();
+
+  if (currentTelemetryPath !== PATH_TARGET_POS) {
+    // ── Path 1 / 3 (drone position): heading = aircraft yaw ──
+    // Principal ray: drone → boresight centre
+    const bs = computeBoresightPoint(s.lat, s.lon, s.absAlt, s.relAlt, s.yaw, s.pitch);
+    const rayPts = bs ? [[s.lat, s.lon], [bs.lat, bs.lon]] : [];
+    footprintRayLayer = syncPolyline(footprintRayLayer, rayPts, RAY_STYLE);
+
+    // Accurate polygon from edge-ray intersections with flat ground or DEM
+    const poly = useDem
+      ? computeTerrainFootprint(s.lat, s.lon, s.absAlt, s.yaw, s.pitch, hFov, vFov)
+      : computeFlatFootprint(s.lat, s.lon, s.relAlt, s.yaw, s.pitch, hFov, vFov);
+    if (poly.length >= 3) {
+      footprintLayer = syncPolygon(footprintLayer, poly, style);
+    } else {
+      if (footprintLayer) footprintLayer.setLatLngs([]);
+    }
+
+  } else {
+    // ── Path 2 (Matrice 300 + Zenmuse thermal): lat/lon = boresight (camera ground target) ──
+    // Drone position is not in metadata; no principal ray. Show oriented ellipse at boresight.
+    // Camera azimuth: (f8.f8 − f7.f9)/100 + 180 — empirically validated at t=22.629s → 178°.
+    if (footprintRayLayer) footprintRayLayer.setLatLngs([]);
+    setFootprintMode(FOOTPRINT_MODE_FLAT);
+
+    const az = (s.cameraAz != null) ? s.cameraAz : 0;
+    // Ellipse oriented along camera azimuth. Size is a placeholder (FOV/pitch not yet calibrated).
+    const ellipse = ellipseLatLngs(s.lat, s.lon, 35, 20, az);
+    footprintLayer = syncPolygon(footprintLayer, ellipse, FLAT_FOOTPRINT_STYLE);
+  }
+};
+
+// ── Hook into initFlightPath to show export btn and load DEM/heatmap ──
+const _origInitFlightPath = initFlightPath;
+initFlightPath = function() {
+  _origInitFlightPath();
+  gearControl._container.style.display = '';
+  document.getElementById('mapControls').style.display = 'flex';
+  // Clear stale footprint layers from any previous flight.
+  if (footprintLayer)    footprintLayer.setLatLngs([]);
+  if (footprintRayLayer) footprintRayLayer.setLatLngs([]);
+  refreshDemCoverageState();
+  setFootprintMode(FOOTPRINT_MODE_FLAT);
+  refreshOverlayUi();
+  loadDEM();
+  loadHeatmap(currentBasename);
+};
+</script>
+</body>
+</html>
