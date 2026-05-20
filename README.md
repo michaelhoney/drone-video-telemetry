@@ -1,6 +1,6 @@
-# DJI Telemetry Map Viewer v0.5
+# DJI Telemetry Map Viewer v0.6
 
-Current version: `v0.5`
+Current version: `v0.6`
 
 An HTML application that plays DJI drone video alongside a live satellite map, synchronised frame-by-frame using telemetry extracted from the MP4 file or a companion `.SRT` sidecar. It shows a zero-config estimated camera ground footprint by default using `rel_alt` and a flat-ground assumption, and can optionally upgrade that footprint plus a visibility heatmap using a Digital Elevation Model when the loaded flight actually overlaps the DEM coverage.
 
@@ -31,10 +31,16 @@ python3 -m http.server 8000
 
 The terrain-aware footprint uses a shared area-wide DEM (`dem/flight-dem.{bin,json}`). The viewer now checks the flight telemetry against the DEM bounds and only uses terrain-aware ray-casting when the current flight position is inside DEM coverage. The heatmap is per-flight and keyed by MP4 basename (`dem/visibility/<basename>.{bin,json}`). See [DEM preprocessing](#dem-preprocessing) below for generating these.
 
-## Roadmap
-- v0.6:
-  - side-by-side view: when window is wider than it is tall, put video + HUD on left, map on right. Vertical split is initially 50/50 but can be dragged left and right. Video is cropped at sides by default (fill height of space) but there is a toggle top-left to toggle between fill-height and fill-width 
+## Responsive layout
 
+The viewer adapts its layout based on window aspect ratio:
+
+- **Stacked mode** (window taller than 1.2× its width) — video on top, HUD strip in the middle, map below. A vertical drag handle between the HUD and map lets you resize the split.
+- **Side-by-side mode** (window wider than 1.2× its height) — video + controls + HUD on the left, map on the right, with a horizontal drag handle to resize the split (default 50/50). The compass tape is hidden to keep the HUD compact.
+
+In side-by-side mode, a **video fit toggle** appears top-left on the video with two states:
+- **Fill height** (default) — video fills the vertical space, cropping the sides
+- **Fill width** — video fits within the panel width, with letterboxing above/below
 
 ## Keyboard controls
 
@@ -163,7 +169,7 @@ Precomputed offline by `dem/compute_visibility.py` (see below), then rendered in
 
 ## Architecture
 
-The viewer is a single HTML file (~1100 lines) with no build step. It loads three CDN dependencies:
+The viewer is a single HTML file (~2200 lines) with no build step. It loads three CDN dependencies:
 
 | Library | Version | Purpose |
 |---|---|---|
@@ -184,6 +190,7 @@ The viewer is a single HTML file (~1100 lines) with no build step. It loads thre
 8. **Keyboard controls** -- Space for play/pause, arrow keys for ±10s seek
 9. **File loading** -- Drop zone with drag/drop and click-to-browse, supports MP4, SRT, or both together; progress bar, autoplay
 10. **Footprint mode UI** -- clear map labeling for flat-ground estimated vs DEM terrain-aware footprint modes
+11. **Layout management** -- aspect-ratio-driven stacked/side-by-side switching, draggable split handles, video fit toggle
 
 ### Design decisions
 
