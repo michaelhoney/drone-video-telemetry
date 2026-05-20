@@ -11,9 +11,75 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
 
-  .container { display: flex; flex-direction: column; min-height: 100vh; }
+  .container { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   .video-panel { flex: none; display: flex; flex-direction: column; background: #0f0f1a; }
-  .map-panel { flex: 1; position: relative; min-height: 50vh; }
+  .map-panel { flex: 1; position: relative; min-height: 120px; }
+
+  /* ── Side-by-side layout ── */
+  .container.side-by-side { flex-direction: row; }
+  .container.side-by-side .video-panel { flex: none; height: 100vh; overflow: hidden; }
+  .container.side-by-side .map-panel { flex: 1; min-height: unset; height: 100vh; }
+  .container.side-by-side .video-wrap { flex: 1; padding-top: 0; min-height: 0; }
+  .container.side-by-side .video-wrap video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+  /* ── Drag handles ── */
+  .drag-handle {
+    flex: none; background: #0a0a14; display: flex; align-items: center; justify-content: center;
+    user-select: none; touch-action: none; z-index: 10;
+  }
+  .drag-handle-h {
+    width: 8px; cursor: col-resize;
+    border-left: 1px solid rgba(255,255,255,0.06);
+    border-right: 1px solid rgba(255,255,255,0.06);
+    flex-direction: column; gap: 3px;
+  }
+  .drag-handle-v {
+    height: 8px; cursor: row-resize;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    flex-direction: row; gap: 3px;
+  }
+  .drag-handle-h .grip-line {
+    width: 1px; height: 16px; background: rgba(255,255,255,0.18);
+  }
+  .drag-handle-v .grip-line {
+    height: 1px; width: 16px; background: rgba(255,255,255,0.18);
+  }
+  .drag-handle:hover .grip-line { background: rgba(255,160,40,0.5); }
+
+  /* ── Video fit toggle ── */
+  .video-fit-toggle {
+    position: absolute; top: 36px; left: 10px; z-index: 6;
+    display: none; background: rgba(10,10,18,0.82);
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 6px;
+    overflow: hidden; cursor: pointer; padding: 0;
+    backdrop-filter: blur(4px);
+  }
+  .video-fit-toggle .vft-opt {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 28px; border: none; background: none; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .video-fit-toggle .vft-opt.active { background: rgba(255,160,40,0.18); }
+  .video-fit-toggle .vft-opt svg { display: block; }
+  .video-fit-toggle .vft-sep {
+    display: inline-block; width: 1px; height: 20px; background: rgba(255,255,255,0.1);
+    vertical-align: middle;
+  }
+
+  /* ── HUD compact in side-by-side ── */
+  .container.side-by-side .hud-strip {
+    grid-template-columns: 1fr 1fr;
+    padding: 6px 12px;
+    gap: 2px 8px;
+  }
+  .container.side-by-side .hud-centre { display: none; }
+  .container.side-by-side .hud-left,
+  .container.side-by-side .hud-right { gap: 12px; flex-wrap: wrap; justify-content: center; }
+  .container.side-by-side .hud-cell .hud-value,
+  .container.side-by-side .hud-instrument .hud-value { font-size: 1.3em; }
+  .container.side-by-side .hud-instrument canvas { width: 56px; height: 56px; }
+  .container.side-by-side .hud-time .hud-time-clock { font-size: 1.3em; }
 
   .video-wrap { position: relative; width: 100%; padding-top: 56.25%; background: #000; }
   .video-wrap video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
@@ -285,7 +351,25 @@
 <div class="container">
   <div class="video-panel">
     <div class="video-wrap">
-      <div class="app-version">v0.5</div>
+      <div class="app-version">v0.6</div>
+      <div class="video-fit-toggle" id="videoFitToggle">
+        <button class="vft-opt active" id="vftFillH" title="Fill height (crop sides)">
+          <svg width="18" height="14" viewBox="0 0 18 14"><rect x="1" y="1" width="16" height="12" rx="1" fill="none" stroke="#888" stroke-width="1"/>
+            <line x1="5" y1="1" x2="5" y2="13" stroke="#888" stroke-width="0.7" stroke-dasharray="2 1.5"/>
+            <line x1="13" y1="1" x2="13" y2="13" stroke="#888" stroke-width="0.7" stroke-dasharray="2 1.5"/>
+            <line x1="9" y1="3" x2="9" y2="11" stroke="#ccc" stroke-width="1.2"/>
+            <path d="M9 3 L7.5 5" stroke="#ccc" stroke-width="1.2"/><path d="M9 3 L10.5 5" stroke="#ccc" stroke-width="1.2"/>
+            <path d="M9 11 L7.5 9" stroke="#ccc" stroke-width="1.2"/><path d="M9 11 L10.5 9" stroke="#ccc" stroke-width="1.2"/>
+          </svg>
+        </button><span class="vft-sep"></span>
+        <button class="vft-opt" id="vftFillW" title="Fill width (letterbox)">
+          <svg width="18" height="14" viewBox="0 0 18 14"><rect x="1" y="1" width="16" height="12" rx="1" fill="none" stroke="#888" stroke-width="1"/>
+            <line x1="4" y1="7" x2="14" y2="7" stroke="#ccc" stroke-width="1.2"/>
+            <path d="M4 7 L6 5.5" stroke="#ccc" stroke-width="1.2"/><path d="M4 7 L6 8.5" stroke="#ccc" stroke-width="1.2"/>
+            <path d="M14 7 L12 5.5" stroke="#ccc" stroke-width="1.2"/><path d="M14 7 L12 8.5" stroke="#ccc" stroke-width="1.2"/>
+          </svg>
+        </button>
+      </div>
       <video id="video" style="display:none"></video>
       <div class="drop-zone" id="dropMp4">
         <h3>Drop DJI MP4 here</h3>
@@ -349,6 +433,10 @@
         <span class="hud-value" id="hudAbsAlt">--</span>
       </div>
     </div>
+  </div>
+
+  <div class="drag-handle drag-handle-v" id="dragHandle">
+    <div class="grip-line"></div><div class="grip-line"></div><div class="grip-line"></div>
   </div>
 
   <div class="map-panel">
@@ -1297,6 +1385,10 @@ async function loadMp4(file) {
   const mapPanel = document.querySelector('.map-panel');
   const mapHint = document.getElementById('mapHint');
   checkMapVisible = function() {
+    if (document.querySelector('.container').classList.contains('side-by-side')) {
+      mapHint.style.display = 'none';
+      return;
+    }
     const rect = mapPanel.getBoundingClientRect();
     const visible = rect.top < window.innerHeight - 40;
     mapHint.style.display = visible ? 'none' : 'flex';
@@ -1995,6 +2087,118 @@ initFlightPath = function() {
   loadDEM();
   loadHeatmap(currentBasename);
 };
+
+// ── v0.6 Layout: side-by-side & drag handles ──
+(function() {
+  const container  = document.querySelector('.container');
+  const videoPanel = document.querySelector('.video-panel');
+  const mapPanel   = document.querySelector('.map-panel');
+  const hudStrip   = document.getElementById('hudStrip');
+  const dragHandle = document.getElementById('dragHandle');
+  const videoWrap  = document.querySelector('.video-wrap');
+  const vftToggle  = document.getElementById('videoFitToggle');
+  const vftFillH   = document.getElementById('vftFillH');
+  const vftFillW   = document.getElementById('vftFillW');
+
+  let isSideBySide = false;
+  let hSplitPct    = 50;    // side-by-side: video panel width %
+  let vSplitPx     = null;  // stacked: video panel height px (null = use padding-top default)
+  let videoFit     = 'cover';
+
+  function applyLayout() {
+    const wantSBS = window.innerWidth > window.innerHeight * 1.2;
+    if (wantSBS === isSideBySide) return;
+    isSideBySide = wantSBS;
+
+    if (isSideBySide) {
+      container.classList.add('side-by-side');
+      dragHandle.className = 'drag-handle drag-handle-h';
+      videoPanel.appendChild(hudStrip);
+      container.insertBefore(dragHandle, mapPanel);
+      videoPanel.style.width  = hSplitPct + '%';
+      videoPanel.style.height = '';
+      videoWrap.style.paddingTop = '';
+      videoWrap.style.flex = '';
+      video.style.objectFit = videoFit;
+      vftToggle.style.display = 'flex';
+    } else {
+      container.classList.remove('side-by-side');
+      dragHandle.className = 'drag-handle drag-handle-v';
+      container.insertBefore(hudStrip, dragHandle);
+      videoPanel.style.width = '';
+      if (vSplitPx !== null) {
+        videoPanel.style.height = vSplitPx + 'px';
+        videoWrap.style.paddingTop = '0';
+        videoWrap.style.flex = '1';
+      } else {
+        videoPanel.style.height = '';
+        videoWrap.style.paddingTop = '';
+        videoWrap.style.flex = '';
+      }
+      video.style.objectFit = 'contain';
+      vftToggle.style.display = 'none';
+    }
+    map.invalidateSize();
+  }
+
+  // ── Drag handle ──
+  let dragging = false;
+
+  dragHandle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    dragging = true;
+    document.body.style.cursor = isSideBySide ? 'col-resize' : 'row-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const cr = container.getBoundingClientRect();
+
+    if (isSideBySide) {
+      const pct = ((e.clientX - cr.left) / cr.width) * 100;
+      hSplitPct = Math.max(20, Math.min(80, pct));
+      videoPanel.style.width = hSplitPct + '%';
+    } else {
+      const hudH = hudStrip.offsetHeight;
+      const handleH = dragHandle.offsetHeight;
+      const y = e.clientY - cr.top - hudH - handleH;
+      vSplitPx = Math.max(60, Math.min(cr.height - hudH - handleH - 80, y));
+      videoPanel.style.height = vSplitPx + 'px';
+      videoWrap.style.paddingTop = '0';
+      videoWrap.style.flex = '1';
+    }
+    map.invalidateSize();
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    map.invalidateSize();
+  });
+
+  // ── Video fit toggle (side-by-side only) ──
+  vftFillH.addEventListener('click', () => {
+    videoFit = 'cover';
+    video.style.objectFit = 'cover';
+    vftFillH.classList.add('active');
+    vftFillW.classList.remove('active');
+  });
+  vftFillW.addEventListener('click', () => {
+    videoFit = 'contain';
+    video.style.objectFit = 'contain';
+    vftFillW.classList.add('active');
+    vftFillH.classList.remove('active');
+  });
+
+  applyLayout();
+  window.addEventListener('resize', () => {
+    applyLayout();
+    map.invalidateSize();
+  });
+})();
 </script>
 </body>
 </html>

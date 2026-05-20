@@ -31,6 +31,11 @@ python3 -m http.server 8000
 
 The terrain-aware footprint uses a shared area-wide DEM (`dem/flight-dem.{bin,json}`). The viewer now checks the flight telemetry against the DEM bounds and only uses terrain-aware ray-casting when the current flight position is inside DEM coverage. The heatmap is per-flight and keyed by MP4 basename (`dem/visibility/<basename>.{bin,json}`). See [DEM preprocessing](#dem-preprocessing) below for generating these.
 
+## Roadmap
+- v0.6:
+  - side-by-side view: when window is wider than it is tall, put video + HUD on left, map on right. Vertical split is initially 50/50 but can be dragged left and right. Video is cropped at sides by default (fill height of space) but there is a toggle top-left to toggle between fill-height and fill-width 
+
+
 ## Keyboard controls
 
 | Key | Action |
