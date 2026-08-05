@@ -80,7 +80,7 @@ A small control panel appears on the map after telemetry loads:
 
 - **Estimated footprint (default)** — semi-transparent orange polygon on the map showing what the camera sees on the ground, updated every telemetry tick. When no DEM is available, it uses `rel_alt` as camera height above takeoff level and intersects the camera rays with a flat ground plane. The UI labels this explicitly as an estimate based on the flat-ground assumption, and draws it dashed to distinguish it from the terrain-aware mode.
 - **Terrain-aware footprint (optional)** — when `dem/flight-dem.{bin,json}` loads successfully and the current flight overlaps that DEM, the same overlay switches to DEM ray-casting against real terrain. If the movie is outside the DEM extent, or leaves it mid-flight, the viewer stays on or falls back to the flat-ground estimate and explains why in the UI.
-- **Visibility heatmap** — per-flight precomputed overlay showing how well each ground cell was observed across the whole flight, weighted by inverse-squared slant distance. Toggleable, with an opacity slider, and available only when the per-flight DEM-derived visibility files can be fetched.
+- **Visibility dot heatmap** — per-flight precomputed overlay showing how well each ground area was observed across the whole flight, weighted by inverse-squared slant distance and rendered as a hexagonal dot lattice. Toggleable, with opacity and palette swatch controls, and available only when the per-flight DEM-derived visibility files can be fetched.
 - **Export Telemetry .JSON** button — dumps the parsed telemetry array as `<basename>-telemetry.json` for feeding into the Python visibility pipeline.
 
 ### Loading
@@ -165,7 +165,7 @@ This runs sub-millisecond per frame. The DEM itself is loaded once at startup as
 
 ### Visibility heatmap
 
-Precomputed offline by `dem/compute_visibility.py` (see below), then rendered in the browser as a colour-ramped canvas inside a Leaflet `L.ImageOverlay`. The ramp is log-scaled to compress the huge dynamic range of 1/d² scores: transparent for zero, purple for barely-seen ground, through orange to bright yellow/white for well-observed ground.
+Precomputed offline by `dem/compute_visibility.py` (see below), then rendered in the browser as a hexagonal dot lattice inside a Leaflet `L.ImageOverlay`. Zero-score ground stays transparent with no dot. Non-zero cells are sampled into staggered hex positions, with dot area and colour log-scaled against a robust high-percentile cap to compress the huge dynamic range of 1/d² scores. The map control offers two redraw-only palette swatches: **Lava** for high-contrast satellite viewing, and **Viridis** for a familiar perceptual scientific ramp. Both use the top quarter of their colour range so low-score dots stay readable over satellite imagery.
 
 ## Architecture
 
