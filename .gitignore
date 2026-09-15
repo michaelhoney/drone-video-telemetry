@@ -1,6 +1,7 @@
 # Large data files — keep the folders, ignore contents
 dem/**
 !dem/.gitkeep
+!dem/*.py
 mp4/**
 !mp4/.gitkeep
 
