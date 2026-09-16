@@ -296,6 +296,43 @@ The output basename is auto-derived by stripping `-telemetry` from the input fil
 
 Processing is numpy-vectorised with a coarse-to-fine ray march; a typical 7-minute flight takes 3-5 seconds on a laptop. Every parameter (sample rate, ray grid density, step sizes, score exponent, output cell size, sensor geometry) is a CLI flag — see `--help`.
 
+### 5. Export sitewide coverage for QGIS — whenever you want a shareable layer
+
+`export_coverage.py` turns the per-flight heatmaps into a vector layer. Each video becomes a **nested stack of polygons, one per viewing-distance level**, carrying the flight's date, time and stats as attributes. Load it in QGIS beside your other layers to show colleagues where we have drone vision, from when, and how good a look we got.
+
+```bash
+python3 dem/export_coverage.py --area marathon          # -> dem/exports/marathon-coverage.geojson
+python3 dem/export_coverage.py                          # every area with heatmaps
+python3 dem/export_coverage.py --area marathon --output ~/Desktop/marathon.gpkg
+```
+
+Output is EPSG:4326 MultiPolygon. The extension picks the format — `.geojson` is written directly with tidied coordinate precision; anything else OGR knows (`.gpkg`, `.shp`) goes through geopandas.
+
+**Levels —** heatmap scores accumulate `1/d²` per sampled second, so a cell seen for S seconds from d metres scores `S/d²`. That makes each level readable as *"seen for at least `--min-seconds` from within `<level>` metres"*. Shorter distance means better ground detail, so the levels nest — the closest is the smallest and sits inside all the others. The default halves at each step, which puts a clean 4× jump in threshold between bands:
+
+| Level | Roughly |
+|---|---|
+| 25 m | as close as the camera gets at normal flight height — near-nadir, right under the track |
+| 50 m | close enough to pick out an individual plant |
+| 100 m | good working detail |
+| 200 m | recognisable structure — tracks, canopy gaps, erosion |
+| 400 m | distant and oblique — context only |
+
+```bash
+python3 dem/export_coverage.py --area marathon --levels 100,200,300,500  # retune the ramp
+python3 dem/export_coverage.py --area marathon --levels 300              # one feature per video
+```
+
+Flights sit around 50 m AGL, so the inner levels trace the flight lines and the outer bands fan out around them. They also open up the blind spot directly beneath the aircraft, where the camera looked ahead rather than straight down — the holes in the innermost polygons are real, not artefacts.
+
+**Styling the stack in QGIS —** because the levels nest, a *single* semi-transparent fill does the work: set the layer to one fill colour at ~25 % opacity with no stroke, and the four overlapping polygons shade themselves — palest where a flight only glimpsed the ground from 500 m, darkest over what it saw from within 100 m. For crisper bands instead, categorise on `within_m` with an opaque ramp, or load the file four times filtered to one level each if you want separate layer entries with independent opacity.
+
+Cells above a level's threshold are polygonised at the heatmap's 10 m grid, then cleaned: `--min-patch-m2` (default 2000 m²) drops coverage specks and pinholes, and `--simplify-m` (default 5 m) trims vertices — raise it for smoother outlines, set 0 to keep exact cell edges.
+
+**Attributes —** `area`, `video`, `date`, `year`, `flight_start`, `flight_end`, `duration_min`, `alt_agl_max_m`, `alt_agl_mean_m`, `seconds_sampled`, `mp4` (the path back to the source video), plus per level: `level` (1 = closest), `levels`, `within_m`, `min_seconds`, `score_threshold`, `cell_size_m` and `coverage_ha`.
+
+Dates come from the telemetry's own timestamps, not the filename; a mismatch between the two is reported as it exports. Features are written newest flight first, and widest level first within a flight so the closer levels draw on top. Flights overlap each other as well, so categorise on `year` or `date` to show when each patch was last flown.
+
 ### File layout after preprocessing
 
 ```
@@ -310,7 +347,10 @@ drone_video_telemetry/
     process_flights.py              # Batch orchestrator (ffmpeg + compute_visibility)
     preprocess_dem.py               # Clip area-dem.tif to flight-dem
     compute_visibility.py
+    export_coverage.py              # Per-flight coverage polygons for QGIS
     PLAN.md                         # Original design notes
+    exports/
+      <area>-coverage.geojson       # Per-flight coverage polygons for QGIS
     areas/
       index.json                    # Area names + DEM bounds (read by the viewer)
       marathon/
@@ -345,6 +385,7 @@ Works on macOS, Windows, and Linux. Tested in Chrome and Safari; should work in 
 | `dem/preprocess_dem.py` | Clip + optionally resample an area DEM for browser use |
 | `dem/compute_visibility.py` | Ray-cast visibility heatmap from telemetry + DEM |
 | `dem/process_flights.py` | Batch-process every area MP4 under `mp4/` through telemetry + visibility (needs ffmpeg) |
+| `dem/export_coverage.py` | Export per-flight coverage polygons as a GIS layer for QGIS |
 | `dem/PLAN.md` | Original design notes for the DEM features |
 | `dem/camera-calibration.json` | Camera pitch / heading / FOV corrections saved from the viewer's calibration panel (optional) |
 | `dem/areas/index.json` | Area names and DEM bounds for the viewer (generated) |
@@ -353,3 +394,4 @@ Works on macOS, Windows, and Linux. Tested in Chrome and Safari; should work in 
 | `dem/areas/<area>/flight-dem.{bin,json}` | Shared clipped DEM for the area (generated) |
 | `dem/areas/<area>/telemetry/<basename>-telemetry.json` | Per-flight telemetry (extracted, or exported from viewer) |
 | `dem/areas/<area>/visibility/<basename>.{bin,json}` | Per-flight visibility heatmap (generated) |
+| `dem/exports/<area>-coverage.geojson` | Per-flight coverage polygons for QGIS (generated) |
