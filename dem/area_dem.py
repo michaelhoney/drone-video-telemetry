@@ -252,12 +252,31 @@ def cmd_extent(args):
 
 # ── tiles ──
 
+MAX_QUERY_URL = 3500  # ELVIS answers a GET; a long outline overflows the URI (HTTP 414)
+
+
 def query_elvis(polygon):
-    """Raw `available_data` list from the ELVIS downloadables API for a polygon."""
+    """Raw `available_data` list from the ELVIS downloadables API for a polygon.
+
+    The outline is simplified as much as the URL length needs — the listing is
+    informational, and the portal gets the full polygon when you order.
+    """
     if polygon.geom_type != "Polygon":
         polygon = polygon.convex_hull
-    wkt = "POLYGON((" + ",".join(f"{x} {y}" for x, y in polygon.exterior.coords) + "))"
-    url = ELVIS_DOWNLOADABLES + "?" + urllib.parse.urlencode({"polygon": wkt}, quote_via=urllib.parse.quote)
+    simplified = polygon
+    for tolerance in (0, 0.0002, 0.0005, 0.001, 0.002, 0.005):  # degrees: ~0 to ~500 m
+        simplified = polygon.simplify(tolerance) if tolerance else polygon
+        wkt = "POLYGON((" + ",".join(f"{x:.6f} {y:.6f}" for x, y in simplified.exterior.coords) + "))"
+        url = ELVIS_DOWNLOADABLES + "?" + urllib.parse.urlencode({"polygon": wkt}, quote_via=urllib.parse.quote)
+        if len(url) <= MAX_QUERY_URL:
+            break
+    else:
+        simplified = polygon.envelope  # last resort: the bounding box
+        wkt = "POLYGON((" + ",".join(f"{x:.6f} {y:.6f}" for x, y in simplified.exterior.coords) + "))"
+        url = ELVIS_DOWNLOADABLES + "?" + urllib.parse.urlencode({"polygon": wkt}, quote_via=urllib.parse.quote)
+    if len(simplified.exterior.coords) < len(polygon.exterior.coords):
+        print(f"  (querying with a simplified outline: {len(simplified.exterior.coords)} points "
+              f"instead of {len(polygon.exterior.coords)}, to fit the request URL)")
     # The API sits behind CloudFront rules that reject requests which don't
     # look like they come from the portal.
     req = urllib.request.Request(url, headers={
