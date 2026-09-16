@@ -38,6 +38,7 @@ RAY_GRID_H = 50               # rays across horizontal FOV
 RAY_GRID_V = 40               # rays across vertical FOV
 RAY_STEP_M = 2.0              # step size in metres
 MAX_RANGE_M = 1000.0           # max ray march distance
+MIN_RANGE_M = 5.0              # hits closer than this score as if at this distance
 SCORE_EXPONENT = 2.0           # score = 1/d^n
 OUTPUT_RESOLUTION_M = 10.0     # output grid cell size
 SENSOR_WIDTH_MM = 9.6          # M4E sensor width  } full 4:3 sensor that the 35 mm-equivalent focal
@@ -46,7 +47,7 @@ FRAME_ASPECT = 16 / 9          # video frame: full sensor width, top/bottom crop
 
 # Bumped when the camera/terrain model changes enough that existing heatmaps are stale
 # (process_flights.py recomputes anything written by an older version).
-MODEL_VERSION = 2
+MODEL_VERSION = 4
 
 
 def compute_fov(sensor_w_mm, sensor_h_mm, equiv_focal_mm, frame_aspect=FRAME_ASPECT):
@@ -175,15 +176,16 @@ def build_ray_directions(yaw_deg, pitch_deg, h_fov_deg, v_fov_deg, grid_h, grid_
     norms = np.linalg.norm(dirs, axis=1, keepdims=True)
     dirs = dirs / norms
 
-    # Filter out rays not pointing meaningfully downward.
-    # 0.01 (0.57°) was too loose — near-horizontal rays graze distant terrain.
-    # -0.05 (~3°) ensures only rays with a real downward component survive.
-    mask = dirs[:, 2] < -0.05
+    # Keep rays that point up as well: on sloping ground (looking across a valley or
+    # up a hillside) they hit real terrain, and dropping them left the top of the frame
+    # unscored. Rays that meet nothing within --max-range simply score nothing. Only
+    # near-vertical "into the sky" rays are worth discarding.
+    mask = dirs[:, 2] < 0.9
     return dirs[mask]
 
 
 def march_rays_vectorised(cam_pos_enu, ray_dirs, dem_lookup, origin_lat, origin_lon,
-                          step_m, max_range_m, score_exp):
+                          step_m, max_range_m, score_exp, min_range_m=5.0):
     """March all rays simultaneously and return (hit_lats, hit_lons, scores).
 
     cam_pos_enu: [east, north, up] in metres from origin
@@ -273,8 +275,9 @@ def march_rays_vectorised(cam_pos_enu, ray_dirs, dem_lookup, origin_lat, origin_
     result_lons = fine_lons[step_idx, valid_indices]
     result_dists = fine_dists[step_idx, valid_indices]
 
-    # Score = 1 / d^exp
-    result_dists = np.maximum(result_dists, 1.0)  # avoid division by zero
+    # Score = 1 / d^exp. Clamp the near distance: flying low over rising ground puts
+    # hits a couple of metres away, where 1/d^2 explodes and swamps the whole grid.
+    result_dists = np.maximum(result_dists, min_range_m)
     scores = 1.0 / np.power(result_dists, score_exp)
 
     return result_lats, result_lons, scores
@@ -291,6 +294,9 @@ def main():
     parser.add_argument("--ray-grid-v", type=int, default=RAY_GRID_V)
     parser.add_argument("--ray-step", type=float, default=RAY_STEP_M)
     parser.add_argument("--max-range", type=float, default=MAX_RANGE_M)
+    parser.add_argument("--min-range", type=float, default=MIN_RANGE_M,
+                        help="Hits closer than this score as if at this distance, so near-camera "
+                             f"ground doesn't swamp the grid (default {MIN_RANGE_M} m)")
     parser.add_argument("--score-exponent", type=float, default=SCORE_EXPONENT)
     parser.add_argument("--output-resolution", type=float, default=OUTPUT_RESOLUTION_M)
     parser.add_argument("--sensor-width", type=float, default=SENSOR_WIDTH_MM)
@@ -439,7 +445,7 @@ def main():
         # March rays
         hit_lats, hit_lons, scores = march_rays_vectorised(
             cam_pos, ray_dirs, dem, centre_lat, centre_lon,
-            args.ray_step, args.max_range, args.score_exponent
+            args.ray_step, args.max_range, args.score_exponent, args.min_range
         )
 
         if len(hit_lats) == 0:
@@ -493,6 +499,7 @@ def main():
             "ray_grid": [args.ray_grid_h, args.ray_grid_v],
             "ray_step_m": args.ray_step,
             "max_range_m": args.max_range,
+            "min_range_m": args.min_range,
             "score_exponent": args.score_exponent,
             "fov_deg": [round(h_fov, 2), round(v_fov, 2)],
             "frame_aspect": round(args.frame_aspect, 4),

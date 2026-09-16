@@ -1941,10 +1941,8 @@ function computeBoresightPoint(lat, lon, absAlt, relAlt, yawDeg, pitchDeg) {
   const MAX_RANGE = 5000;
   let range;
 
-  if (lookU >= -0.01) {
-    // Camera looking up or nearly horizontal — pin at MAX_RANGE for display
-    range = MAX_RANGE;
-  } else if (useDem) {
+  if (useDem) {
+    // March even when the ray points up — terrain ahead can rise into it.
     const STEP = 20;
     range = MAX_RANGE;
     for (let s = 1; s * STEP <= MAX_RANGE; s++) {
@@ -1953,6 +1951,9 @@ function computeBoresightPoint(lat, lon, absAlt, relAlt, yawDeg, pitchDeg) {
       if (Number.isNaN(elev)) break;
       if (absAlt + lookU * d <= elev) { range = d; break; }
     }
+  } else if (lookU >= -0.01) {
+    // No DEM and the ray is at or above the horizon — pin at MAX_RANGE for display
+    range = MAX_RANGE;
   } else {
     range = Math.min(H / (-lookU), MAX_RANGE);
   }
@@ -2054,9 +2055,11 @@ function pushProjectedPoint(polygon, lat, lon, dE, dN, M_PER_DEG_LAT, M_PER_DEG_
   polygon.push([pLat, pLon]);
 }
 
-// March a unit camera ray (east, north, up components) out from the camera until
-// it meets the DEM. Returns [lat, lon] of the hit, or null if the ray leaves DEM
-// coverage or travels MAX_RANGE without reaching the ground.
+// March a unit camera ray (east, north, up components) out from the camera until it
+// meets the DEM. Returns { point: [lat, lon], hit }, where hit is false when the ray
+// left DEM coverage or ran out of range — then point is the last place we could still
+// see terrain, so the footprint stays bounded by what the DEM actually covers instead
+// of shooting off to the horizon. point is null if the ray never reached the DEM.
 function marchRayToTerrain(lat, lon, absAlt, dE, dN, dU, M_PER_DEG_LAT, M_PER_DEG_LON) {
   const MAX_RANGE = 20000;     // march this far looking for a terrain hit
   const COARSE_STEP = 20;      // coarse pass — find approximate intersection
@@ -2064,16 +2067,18 @@ function marchRayToTerrain(lat, lon, absAlt, dE, dN, dU, M_PER_DEG_LAT, M_PER_DE
 
   // Coarse march: find the first step where the ray dips to or below the DEM.
   let coarseHit = -1;
+  let lastInside = null;
   for (let s = 1; s * COARSE_STEP <= MAX_RANGE; s++) {
     const dist = s * COARSE_STEP;
     const pU = absAlt + dU * dist;
     const pLat = lat + (dN * dist) / M_PER_DEG_LAT;
     const pLon = lon + (dE * dist) / M_PER_DEG_LON;
     const demZ = getElevation(pLat, pLon);
-    if (Number.isNaN(demZ)) return null;  // exited DEM coverage — treat as no hit
+    if (Number.isNaN(demZ)) return { point: lastInside, hit: false };  // exited DEM coverage
+    lastInside = [pLat, pLon];
     if (pU <= demZ) { coarseHit = s; break; }
   }
-  if (coarseHit < 0) return null;
+  if (coarseHit < 0) return { point: lastInside, hit: false };  // above terrain for MAX_RANGE
 
   // Refine between (coarseHit-1)*COARSE_STEP and coarseHit*COARSE_STEP.
   const startDist = Math.max((coarseHit - 1) * COARSE_STEP, 1);
@@ -2083,10 +2088,10 @@ function marchRayToTerrain(lat, lon, absAlt, dE, dN, dU, M_PER_DEG_LAT, M_PER_DE
     const pLat = lat + (dN * d) / M_PER_DEG_LAT;
     const pLon = lon + (dE * d) / M_PER_DEG_LON;
     const demZ = getElevation(pLat, pLon);
-    if (Number.isNaN(demZ)) return null;
-    if (pU <= demZ) return [pLat, pLon];
+    if (Number.isNaN(demZ)) return { point: lastInside, hit: false };
+    if (pU <= demZ) return { point: [pLat, pLon], hit: true };
   }
-  return null;
+  return { point: lastInside, hit: false };
 }
 
 function computeTerrainFootprint(lat, lon, absAlt, yawDeg, pitchDeg, hFov, vFov) {
@@ -2102,11 +2107,13 @@ function computeTerrainFootprint(lat, lon, absAlt, yawDeg, pitchDeg, hFov, vFov)
       pushProjectedPoint(polygon, lat, lon, dE, dN, M_PER_DEG_LAT, M_PER_DEG_LON, HORIZON_DIST);
     };
 
-    // Rays pointing above horizontal never hit the ground — extend to the horizon.
-    if (dU > 0.001) { projectToHorizon(); continue; }
+    // Rays pointing above horizontal can still meet rising ground (a hillside ahead,
+    // the far side of a valley), so march them against the DEM as well.
 
-    const hit = marchRayToTerrain(lat, lon, absAlt, dE, dN, dU, M_PER_DEG_LAT, M_PER_DEG_LON);
-    if (hit) polygon.push(hit);
+    // A ray that leaves DEM coverage stops at the edge of what we know; only rays that
+    // never reached the DEM at all fall back to the horizon.
+    const march = marchRayToTerrain(lat, lon, absAlt, dE, dN, dU, M_PER_DEG_LAT, M_PER_DEG_LON);
+    if (march.point) polygon.push(march.point);
     else projectToHorizon();
   }
   return polygon;
@@ -2565,11 +2572,11 @@ initFlightPath = function() {
     const cam = calibratedCamera(s);
     const { M_PER_DEG_LAT, M_PER_DEG_LON, rays } = buildFootprintRays(s.lat, cam.yaw, cam.pitch, cam.hFov, cam.vFov, [[u, v]]);
     const { dE, dN, dU } = rays[0];
-    if (dU >= -0.001) return null;
     if (isPointInsideDemBounds(s.lat, s.lon)) {
-      return marchRayToTerrain(s.lat, s.lon, demCameraAltitude(s), dE, dN, dU, M_PER_DEG_LAT, M_PER_DEG_LON);
+      const march = marchRayToTerrain(s.lat, s.lon, demCameraAltitude(s), dE, dN, dU, M_PER_DEG_LAT, M_PER_DEG_LON);
+      return march.hit ? march.point : null;  // a pin needs a real terrain hit
     }
-    if (!(s.relAlt > 0)) return null;
+    if (dU >= -0.001 || !(s.relAlt > 0)) return null;  // flat-ground fallback: no hit above the horizon
     const dist = s.relAlt / -dU;
     return [s.lat + (dN * dist) / M_PER_DEG_LAT, s.lon + (dE * dist) / M_PER_DEG_LON];
   }
