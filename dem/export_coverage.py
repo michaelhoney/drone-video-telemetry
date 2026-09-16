@@ -20,15 +20,16 @@ Usage:
     python3 dem/export_coverage.py --area marathon --levels 300 # one feature per video
     python3 dem/export_coverage.py --area marathon --output ~/Desktop/marathon.gpkg
 
-Output (EPSG:4326) defaults to dem/exports/<area>-coverage.geojson. Any extension
-OGR knows works — .gpkg is the friendlier QGIS format; .geojson is written directly
-with tidied coordinate precision.
+Output (EPSG:4326) defaults to dem/exports/<area>_drone_video_coverage_<today>.geojson,
+datestamped so a copy sent to someone says when it was made. Any extension OGR knows
+works — .gpkg is the friendlier QGIS format; .geojson is written directly with tidied
+coordinate precision.
 """
 
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import numpy as np
@@ -248,7 +249,8 @@ def main():
     parser.add_argument("--area", help="Only export this area (default: every area with heatmaps)")
     parser.add_argument("--output", type=Path,
                         help=f"Output path; extension picks the format "
-                             f"(default: {rel(EXPORTS_DIR)}/<area>-coverage.geojson)")
+                             f"(default: {rel(EXPORTS_DIR)}/"
+                             f"<area>_drone_video_coverage_<today>.geojson)")
     parser.add_argument("--levels", type=parse_levels, default=LEVELS,
                         help="Comma-separated viewing distances in metres; each video gets one "
                              "nested polygon per level (default "
@@ -269,7 +271,8 @@ def main():
     if not areas:
         sys.exit("No areas have visibility heatmaps yet — run: python3 dem/process_flights.py")
 
-    out_path = args.output or EXPORTS_DIR / f"{args.area or 'all-areas'}-coverage.geojson"
+    out_path = args.output or EXPORTS_DIR / (f"{args.area or 'all-areas'}_drone_video_coverage"
+                                             f"_{date.today().isoformat()}.geojson")
     print(f"{len(args.levels)} level(s): ground seen for {args.min_seconds:g}s or more from "
           f"within " + ", ".join(f"{v:g} m" for v in args.levels))
 
