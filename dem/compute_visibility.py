@@ -44,6 +44,10 @@ SENSOR_WIDTH_MM = 9.6          # M4E sensor width  } full 4:3 sensor that the 35
 SENSOR_HEIGHT_MM = 7.2         # M4E sensor height } length refers to; only the aspect affects FOV
 FRAME_ASPECT = 16 / 9          # video frame: full sensor width, top/bottom cropped (3840x2160 from 5280x3956)
 
+# Bumped when the camera/terrain model changes enough that existing heatmaps are stale
+# (process_flights.py recomputes anything written by an older version).
+MODEL_VERSION = 2
+
 
 def compute_fov(sensor_w_mm, sensor_h_mm, equiv_focal_mm, frame_aspect=FRAME_ASPECT):
     """Compute H/V FOV of a video frame from sensor dimensions and 35mm-equivalent focal length.
@@ -297,6 +301,9 @@ def main():
                         help="Degrees added to gimbal pitch; negative tilts down (viewer camera calibration)")
     parser.add_argument("--yaw-offset", type=float, default=0.0,
                         help="Degrees added to heading (viewer camera calibration)")
+    parser.add_argument("--alt-datum", choices=["takeoff", "absolute"], default="takeoff",
+                        help="'takeoff' (default) shifts abs_alt so the takeoff point sits on the DEM, "
+                             "correcting DJI's barometric datum; 'absolute' uses abs_alt as logged")
     parser.add_argument("--fov-scale", type=float, default=1.0,
                         help="Scale on the image-plane half-width/height tangents; < 1 narrows the view "
                              "(viewer camera calibration)")
@@ -353,6 +360,25 @@ def main():
     dem = DEMLookup(dem_data, dem_transform, dem_bounds)
     print(f"  Grid: {dem.width} x {dem.height}")
 
+    # At takeoff the aircraft is on the ground (rel_alt 0), so its abs_alt should equal the
+    # DEM there. DJI's barometric datum is often several metres out, which scales every ray
+    # by the same fraction, so shift abs_alt to put takeoff on the terrain.
+    alt_offset = 0.0
+    if args.alt_datum == "takeoff":
+        on_ground = next((e for e in telem_all
+                          if abs(e.get("relAlt", 9e9)) < 0.5 and abs(e.get("lat", 0)) > 1e-6), None)
+        if on_ground is None:
+            print("  Altitude datum: no on-ground frame found, using abs_alt as logged")
+        else:
+            dem_z = float(dem.get_elevation_batch(np.array([on_ground["lat"]]),
+                                                  np.array([on_ground["lon"]]))[0])
+            offset = dem_z - (on_ground["absAlt"] - on_ground["relAlt"])
+            if abs(offset) > 50:
+                print(f"  Altitude datum: implausible offset {offset:+.1f} m, using abs_alt as logged")
+            else:
+                alt_offset = offset
+                print(f"  Altitude datum: shifting abs_alt by {alt_offset:+.1f} m to put takeoff on the DEM")
+
     # Compute flight bounding box for output grid
     lats = [e["lat"] for e in telem_all]
     lons = [e["lon"] for e in telem_all]
@@ -397,14 +423,14 @@ def main():
 
         cam_lat = frame["lat"]
         cam_lon = frame["lon"]
-        cam_alt = frame["absAlt"]
+        cam_alt = frame["absAlt"] + alt_offset
         yaw = frame["yaw"] + args.yaw_offset
         pitch = frame["pitch"] + args.pitch_offset
 
         # Camera position in local ENU (metres from centre)
         cam_e = (cam_lon - centre_lon) * m_per_deg_lon
         cam_n = (cam_lat - centre_lat) * m_per_deg_lat
-        cam_u = cam_alt  # absAlt is AMSL, DEM is also referenced to a datum (checked at integration time)
+        cam_u = cam_alt  # on the DEM's vertical datum (see alt_offset above)
         cam_pos = np.array([cam_e, cam_n, cam_u])
 
         # Build rays
@@ -475,6 +501,9 @@ def main():
                 "yaw_offset_deg": args.yaw_offset,
                 "fov_scale": args.fov_scale,
             },
+            "alt_datum": args.alt_datum,
+            "alt_datum_offset_m": round(alt_offset, 2),
+            "model_version": MODEL_VERSION,
         },
     }
     json_path = out_dir / f"{out_name}.json"

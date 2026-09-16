@@ -537,6 +537,7 @@
         <button type="button" id="calibDone" class="primary">Done</button>
       </div>
       <div class="calib-source" id="calibSource"></div>
+      <div class="calib-source" id="calibAltNote"></div>
       <pre class="calib-json" id="calibJson"></pre>
       <div class="calib-actions"><button type="button" id="calibCopy">Copy JSON</button></div>
       <p class="calib-help">Save it as <code>dem/camera-calibration.json</code> and run <code>python3 dem/process_flights.py</code> — heatmaps made with different values are recomputed.</p>
@@ -1294,7 +1295,19 @@ function updateMap(t) {
 
 // ── Video events ──
 const video = document.getElementById('video');
-video.addEventListener('timeupdate', () => { if (telemetryReady) updateMap(video.currentTime); });
+// Drive map updates from displayed video frames where the browser supports it:
+// 'timeupdate' only fires ~4x/s, leaving the map up to 250 ms behind the video —
+// several degrees of heading during a pan, which throws the footprint off badly
+// at range. requestVideoFrameCallback gives us the exact presentation time.
+if (video.requestVideoFrameCallback) {
+  const onVideoFrame = (now, meta) => {
+    if (telemetryReady) updateMap(meta.mediaTime);
+    video.requestVideoFrameCallback(onVideoFrame);
+  };
+  video.requestVideoFrameCallback(onVideoFrame);
+} else {
+  video.addEventListener('timeupdate', () => { if (telemetryReady) updateMap(video.currentTime); });
+}
 video.addEventListener('seeked', () => { if (telemetryReady) { prevAltSample = null; lastVSpeed = 0; lastHSpeed = 0; updateMap(video.currentTime); } });
 
 // ── Custom video controls ──
@@ -1553,6 +1566,7 @@ let heatmapEnabled = false;
 let heatmapAvailable = false;
 let currentBasename = null;
 let currentFlightDemCoverage = null;
+let altDatumOffset = 0;         // metres added to absAlt so takeoff sits on the DEM
 let currentHeatmapPalette = 'lava';
 
 const HEATMAP_DOT_RENDER_SCALE = 4;
@@ -1678,8 +1692,34 @@ function summarizeDemCoverage() {
   };
 }
 
+// At takeoff the aircraft sits on the ground (rel_alt 0), so its abs_alt should equal
+// the DEM there. DJI's barometric datum is often several metres out, which scales every
+// ray by the same fraction, so shift abs_alt to put takeoff on the terrain.
+function computeAltDatumOffset() {
+  if (!dem || !telemetry.length) return 0;
+  const onGround = telemetry.find(s =>
+    Number.isFinite(s.relAlt) && Math.abs(s.relAlt) < 0.5 &&
+    Number.isFinite(s.absAlt) && Math.abs(s.lat) > 1e-6);
+  if (!onGround) return 0;
+  const demZ = getElevation(onGround.lat, onGround.lon);
+  if (!Number.isFinite(demZ)) return 0;
+  const offset = demZ - (onGround.absAlt - onGround.relAlt);
+  // An implausible offset means the takeoff fix or the DEM is wrong — leave telemetry alone.
+  return Math.abs(offset) > 50 ? 0 : offset;
+}
+
+// Camera height for DEM ray-casting, on the DEM's datum.
+function demCameraAltitude(s) {
+  return s.absAlt + altDatumOffset;
+}
+
 function refreshDemCoverageState() {
   currentFlightDemCoverage = summarizeDemCoverage();
+  const previousOffset = altDatumOffset;
+  altDatumOffset = computeAltDatumOffset();
+  if (altDatumOffset !== previousOffset) {
+    console.log('[DEM] Altitude datum offset at takeoff:', altDatumOffset.toFixed(1), 'm');
+  }
 }
 
 function updateHeatmapPaletteButtons() {
@@ -2388,13 +2428,14 @@ updateMap = function(t) {
   if (currentTelemetryPath !== PATH_TARGET_POS) {
     // ── Path 1 / 3 (drone position): heading = aircraft yaw ──
     // Principal ray: drone → boresight centre
-    const bs = computeBoresightPoint(s.lat, s.lon, s.absAlt, s.relAlt, camYaw, camPitch);
+    const camAlt = demCameraAltitude(s);
+    const bs = computeBoresightPoint(s.lat, s.lon, camAlt, s.relAlt, camYaw, camPitch);
     const rayPts = bs ? [[s.lat, s.lon], [bs.lat, bs.lon]] : [];
     footprintRayLayer = syncPolyline(footprintRayLayer, rayPts, RAY_STYLE);
 
     // Accurate polygon from edge-ray intersections with flat ground or DEM
     const poly = useDem
-      ? computeTerrainFootprint(s.lat, s.lon, s.absAlt, camYaw, camPitch, hFov, vFov)
+      ? computeTerrainFootprint(s.lat, s.lon, camAlt, camYaw, camPitch, hFov, vFov)
       : computeFlatFootprint(s.lat, s.lon, s.relAlt, camYaw, camPitch, hFov, vFov);
     if (poly.length >= 3) {
       footprintLayer = syncPolygon(footprintLayer, poly, style);
@@ -2492,6 +2533,11 @@ initFlightPath = function() {
     } else {
       sourceEl.textContent = 'No calibration yet — using the raw gimbal angles.';
     }
+    const altNote = document.getElementById('calibAltNote');
+    altNote.textContent = !dem ? ''
+      : Math.abs(altDatumOffset) < 0.05
+        ? 'Altitude datum: telemetry already matches the DEM at takeoff.'
+        : `Altitude datum: camera ${altDatumOffset > 0 ? 'raised' : 'lowered'} ${Math.abs(altDatumOffset).toFixed(1)} m so takeoff sits on the DEM.`;
     revertBtn.disabled = !fileCalibration;
   }
 
@@ -2521,7 +2567,7 @@ initFlightPath = function() {
     const { dE, dN, dU } = rays[0];
     if (dU >= -0.001) return null;
     if (isPointInsideDemBounds(s.lat, s.lon)) {
-      return marchRayToTerrain(s.lat, s.lon, s.absAlt, dE, dN, dU, M_PER_DEG_LAT, M_PER_DEG_LON);
+      return marchRayToTerrain(s.lat, s.lon, demCameraAltitude(s), dE, dN, dU, M_PER_DEG_LAT, M_PER_DEG_LON);
     }
     if (!(s.relAlt > 0)) return null;
     const dist = s.relAlt / -dU;

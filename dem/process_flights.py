@@ -54,10 +54,13 @@ def load_calibration():
         return read_calibration(json.load(f))
 
 
-def visibility_calibration(vis_json):
-    """Calibration an existing visibility heatmap was computed with."""
+def visibility_is_current(vis_json, calibration):
+    """Whether an existing heatmap used this calibration and the current camera/terrain model."""
+    from compute_visibility import MODEL_VERSION
     with open(vis_json) as f:
-        return read_calibration(json.load(f).get("config", {}).get("calibration"))
+        config = json.load(f).get("config", {})
+    return (config.get("model_version") == MODEL_VERSION
+            and read_calibration(config.get("calibration")) == calibration)
 
 
 # Same regex shape the JS parser uses (see index.html parseTelemetryLine /
@@ -187,10 +190,10 @@ def process_one(mp4_path, area, calibration, force=False):
         print(f"  visibility waiting on {rel(d / 'area-dem.tif')} — run: python3 dem/area_dem.py ingest {area}")
         return "TELEMETRY ONLY"
     if vis_json.exists() and vis_bin.exists() and not force:
-        if visibility_calibration(vis_json) == calibration:
+        if visibility_is_current(vis_json, calibration):
             print(f"  visibility already present: {rel(vis_json)}")
             return "OK"
-        print(f"  camera calibration changed since {rel(vis_json)} was made — recomputing")
+        print(f"  camera model or calibration changed since {rel(vis_json)} was made — recomputing")
     if not run_compute_visibility(telemetry_json, area, mp4_path, calibration):
         print(f"  FAILED: visibility compute")
         return "FAIL"
