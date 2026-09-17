@@ -29,7 +29,7 @@ python3 -m http.server 8000
 # then open http://localhost:8000
 ```
 
-The terrain-aware footprint uses a shared area-wide DEM (`dem/flight-dem.{bin,json}`). The viewer now checks the flight telemetry against the DEM bounds and only uses terrain-aware ray-casting when the current flight position is inside DEM coverage. The heatmap is per-flight and keyed by MP4 basename (`dem/visibility/<basename>.{bin,json}`). See [DEM preprocessing](#dem-preprocessing) below for generating these.
+DEM data is organised by area — one location with any number of flights, each in `dem/areas/<area>/`. When a flight loads, the viewer reads `dem/areas/index.json`, picks the area whose DEM covers the most of the flight, and loads that area's shared DEM (`dem/areas/<area>/flight-dem.{bin,json}`). It only uses terrain-aware ray-casting while the current flight position is inside DEM coverage. The heatmap is per-flight and keyed by MP4 basename (`dem/areas/<area>/visibility/<basename>.{bin,json}`). See [DEM preprocessing](#dem-preprocessing) below for generating these.
 
 ## Responsive layout
 
@@ -79,8 +79,9 @@ The heading and pitch instruments have animated canvas graphics with wireframe i
 A small control panel appears on the map after telemetry loads:
 
 - **Estimated footprint (default)** — semi-transparent orange polygon on the map showing what the camera sees on the ground, updated every telemetry tick. When no DEM is available, it uses `rel_alt` as camera height above takeoff level and intersects the camera rays with a flat ground plane. The UI labels this explicitly as an estimate based on the flat-ground assumption, and draws it dashed to distinguish it from the terrain-aware mode.
-- **Terrain-aware footprint (optional)** — when `dem/flight-dem.{bin,json}` loads successfully and the current flight overlaps that DEM, the same overlay switches to DEM ray-casting against real terrain. If the movie is outside the DEM extent, or leaves it mid-flight, the viewer stays on or falls back to the flat-ground estimate and explains why in the UI.
+- **Terrain-aware footprint (optional)** — when an area in `dem/areas/index.json` covers the current flight and its `flight-dem.{bin,json}` loads successfully, the same overlay switches to DEM ray-casting against real terrain. If no area covers the movie, or it leaves the DEM mid-flight, the viewer stays on or falls back to the flat-ground estimate and explains why in the UI.
 - **Visibility dot heatmap** — per-flight precomputed overlay showing how well each ground area was observed across the whole flight, weighted by inverse-squared slant distance and rendered as a hexagonal dot lattice. Toggleable, with opacity and palette swatch controls, and available only when the per-flight DEM-derived visibility files can be fetched.
+- **Calibrate camera…** button — pauses the video and opens a calibration panel for correcting the camera model against reality. Click up to four features in the video that you can also find on the map (a house, a fence corner, a lone tree); each gets a numbered pin on the video and a matching pin on the map where the model says that point is on the ground. Adjust **Pitch offset**, **Heading offset** and **FOV scale** until the map pins sit on their features — the footprint redraws live. Pins clear when the video plays or seeks. Flat ground with features near the top of the frame gives the most sensitive pitch estimate, and checking a steep and a shallow frame separates a pitch offset from an FOV error. Values are remembered in the browser; the panel shows them as JSON to save as `dem/camera-calibration.json`, which the viewer loads by default and `process_flights.py` applies to the heatmaps.
 - **Export Telemetry .JSON** button — dumps the parsed telemetry array as `<basename>-telemetry.json` for feeding into the Python visibility pipeline.
 
 ### Loading
@@ -156,10 +157,10 @@ The M4E gimbal does not independently rotate on the yaw axis during manual fligh
 The footprint polygon is computed every frame inside the browser:
 
 1. **Build camera basis** — from the interpolated `yaw`/`pitch` telemetry, derive the look, right, and up vectors in local East-North-Up coordinates.
-2. **Generate edge rays** — sample 24 points around the image-plane rectangle (6 per edge + corners), each mapped to a ray direction using the horizontal/vertical FOV. FOV itself is derived from the 35mm-equivalent `focal_len` reported in telemetry plus the M4E's 1/1.3" sensor geometry (9.6 × 7.2 mm).
+2. **Generate edge rays** — sample 24 points around the image-plane rectangle (6 per edge + corners), each mapped to a ray direction using the horizontal/vertical FOV. FOV itself is derived from the 35mm-equivalent `focal_len` reported in telemetry, which DJI quotes for the full 4:3 sensor (84° diagonal at 24 mm). Video keeps the full sensor width and crops the top and bottom, so the vertical FOV comes from the loaded video's own aspect ratio (3840 × 2160 → 71.5° × 44.1°), defaulting to 16:9 when only an SRT is loaded. `compute_visibility.py` does the same, with `process_flights.py` passing each MP4's frame size.
 3. **Zero-config fallback** — if no DEM is loaded, intersect each downward-pointing ray with a flat ground plane at `z = 0` in takeoff-relative coordinates, using `rel_alt` as the camera height above that plane. Rays near or above the horizon are projected out to 50 km so the polygon still reaches "effectively infinite" range.
-4. **DEM upgrade** — if a DEM is loaded, switch the same ray set to a coarse-to-fine terrain march: step along each ray at 20 m intervals up to 20 km, compare the ray altitude to the bilinearly interpolated DEM elevation, then refine the first hit with 2 m steps. Out-of-DEM lookups return `NaN` and terminate the march for that ray.
-5. **Handle unbounded rays** — any ray that never hits terrain (looking above horizon, never descending enough, or exiting DEM coverage) is projected 50 km along its horizontal bearing. This gives the polygon an "infinite top" when the camera is near-horizontal, so the drawn polygon reaches effectively to the horizon instead of truncating.
+4. **DEM upgrade** — if a DEM is loaded, switch the same ray set to a coarse-to-fine terrain march: step along each ray at 20 m intervals up to 20 km, compare the ray altitude to the bilinearly interpolated DEM elevation, then refine the first hit with 2 m steps. Out-of-DEM lookups return `NaN` and terminate the march for that ray. Camera height comes from `abs_alt` shifted onto the DEM's datum: at takeoff `rel_alt` is 0, so `abs_alt` should equal the DEM at that point, and DJI's barometric datum is often several metres out (up to +6 m, or 10% of flying height, across these flights). Without the shift every ray reaches proportionally too far. `compute_visibility.py` applies the same correction (`--alt-datum absolute` to disable).
+5. **Handle unbounded rays** — a ray that leaves DEM coverage, or stays above terrain for the full 20 km march, stops at the last point where the DEM could still be sampled, so the footprint is bounded by real coverage. (Without this, a single ray grazing a ridge and flying on past the DEM edge stretched the drawn polygon hundreds of kilometres.) Only rays that never reach the DEM at all — and every ray in flat-ground mode that points at or above the horizon — are projected 50 km along their horizontal bearing, giving the estimated footprint an "infinite top" when the camera is near-horizontal.
 
 This runs sub-millisecond per frame. The DEM itself is loaded once at startup as a `Float32Array` with bilinear-interpolated lookups.
 
@@ -195,7 +196,8 @@ The viewer is a single HTML file (~2200 lines) with no build step. It loads thre
 ### Design decisions
 
 - **Core viewer runs from `file://`** — MP4 loading, telemetry parsing, HUD, map, and the flat-ground estimated footprint all work with no server, because the MP4 comes in via `<input type=file>` (blob URL, not `fetch`) and map tiles come from HTTPS. Only the DEM-enhanced footprint and heatmap need `fetch()` for local files and therefore a local HTTP server.
-- **Shared DEM, per-flight visibility** — one `flight-dem.{bin,json}` covers every flight in the area (loaded once); per-MP4 `visibility/<basename>.{bin,json}` is fetched fresh each time a new MP4 is loaded. DEM resolution is fully data-driven: the JSON metadata carries `pixel_size_lon`/`pixel_size_lat` and the viewer adapts.
+- **Per-area DEM, per-flight visibility** — one `flight-dem.{bin,json}` per area covers every flight at that location (loaded once, and only reloaded when a flight from a different area is opened); per-MP4 `visibility/<basename>.{bin,json}` is fetched fresh each time a new MP4 is loaded. The area is chosen from `dem/areas/index.json` by how many telemetry positions fall inside each area's DEM bounds. DEM resolution is fully data-driven: the JSON metadata carries `pixel_size_lon`/`pixel_size_lat` and the viewer adapts.
+- **Frame-accurate map updates** — the map, HUD and footprint update from `requestVideoFrameCallback` (the exact presentation time of each displayed frame), falling back to `timeupdate` where that isn't supported. `timeupdate` alone fires only ~4 times a second, which leaves the map up to 250 ms behind the video — several degrees of heading during a pan, and enough to throw the footprint off by tens of metres at range. The telemetry itself is frame-aligned: measured against image motion during hover-and-yaw pans, it matches the picture to within 20 ms.
 - **Chunked file reading** — 64 MB chunks avoid allocating multi-gigabyte ArrayBuffers for large drone videos.
 - **No animation on map follow** — `map.setView()` with `animate: false` prevents tile flicker during continuous tracking.
 - **Fixed-width HUD values** — `min-width` on value elements prevents layout reflow when numbers change width.
@@ -211,74 +213,156 @@ ffmpeg -i input.MP4 -map 0:3 -f srt telemetry.srt
 
 ## DEM preprocessing
 
-The two Python scripts in `dem/` generate the data files the viewer fetches at runtime. Requires `rasterio` and `numpy`. The source DEM (`dem/area-dem.tif`, not tracked here — a ~292 MB LiDAR-derived surface model at 2 m resolution, EPSG:4326) is the input to both.
+DEM data is organised by **area**: one location with any number of flights. A video belongs to an area when it sits in a folder named after the area anywhere under `mp4/` — e.g. `mp4/matrice-4E-mp4/marathon/2026-02-18-elkington.MP4` belongs to `marathon` — and each area keeps its data in `dem/areas/<area>/`. Videos outside an area folder still play, with the flat-ground footprint.
 
-See [`dem/PLAN.md`](dem/PLAN.md) for the full design and [`dem/preprocess_dem.py`](dem/preprocess_dem.py) / [`dem/compute_visibility.py`](dem/compute_visibility.py) for the implementations.
+The scripts in `dem/` generate the data files the viewer fetches at runtime. They need `numpy`, `rasterio`, the GDAL Python bindings (`osgeo`), `shapely` and `pyproj`, plus `ffmpeg` on PATH (`brew install ffmpeg` on macOS).
 
-### 1. Clip the shared DEM — once per project area
+See [`dem/PLAN.md`](dem/PLAN.md) for the original design, and [`dem/area_dem.py`](dem/area_dem.py), [`dem/process_flights.py`](dem/process_flights.py), [`dem/preprocess_dem.py`](dem/preprocess_dem.py) and [`dem/compute_visibility.py`](dem/compute_visibility.py) for the implementations.
 
-`preprocess_dem.py` clips the large source DEM to a browser-loadable `flight-dem.bin` (raw row-major `Float32Array`) plus a `flight-dem.json` metadata sidecar. Clip once to cover **every** flight in the area you care about — the viewer reuses this file for all MP4s.
+### 1. Define the area extent — once per area
 
 ```bash
-# Explicit bounds (south,west,north,east) — note the '=' to keep argparse
-# from interpreting the leading '-' as another flag.
-python3 dem/preprocess_dem.py \
-  --bounds="-42.15242,147.62674,-42.12897,147.64287" \
-  --buffer 2000 \
-  --resolution 5
+python3 dem/area_dem.py extent marathon --buffer 1000 --boundary ~/Desktop/greater_marathon.kml
 ```
 
-Key options:
+This extracts telemetry for every MP4 in the area's folders (if not already done), merges each flight's track with any boundary polygons you pass (KML, GeoJSON, GPKG or shapefile — e.g. property parcels), buffers the result by `--buffer` metres and writes `dem/areas/<area>/extent.geojson` (EPSG:4326). It also reports whether each flight lies fully inside. Pass `--force` to replace an existing extent.
+
+Choose the buffer with oblique footage in mind: for the Elkington flight (camera mostly 20–30° below horizontal, up to 120 m up), 90% of ground hits were within 740 m, 95% within 1.2 km and 99% within 3.3 km.
+
+### 2. Order DEM tiles from ELVIS
+
+```bash
+python3 dem/area_dem.py tiles marathon
+```
+
+Lists what [ELVIS](https://elevation.fsdf.org.au/) holds for the extent — per source, data type, resolution and survey, with tile counts and sizes — and saves the full listing to `dem/areas/<area>/elvis-tiles.json`. The tile files can't be downloaded directly, so order them through the portal:
+
+1. Open https://elevation.fsdf.org.au/ and upload `dem/areas/<area>/extent.geojson` as the area.
+2. Tick the **Digital Elevation Models → 1 Metre** surveys (the point clouds are much larger and not needed), choose GeoTIFF output (any CRS), enter your email and submit.
+3. Put the emailed zip(s) in `dem/areas/<area>/elvis/`. Zipped or already-unzipped tiles both work.
+
+### 3. Build the area DEM
+
+```bash
+python3 dem/area_dem.py ingest marathon
+```
+
+This unzips the download and mosaics every GeoTIFF tile into `dem/areas/<area>/area-dem.tif` (EPSG:4326) over the extent's bounding box, then clips the browser DEM `flight-dem.bin` (raw row-major `Float32Array`) plus its `flight-dem.json` metadata via `preprocess_dem.py`, and rebuilds `dem/areas/index.json`. Mixed GDA94 / GDA2020 tiles are reprojected, and where surveys overlap the newest one wins. ELVIS only supplies tiles that touch the extent polygon, so the rest of the bounding box is filled from the public Copernicus GLO-30 30 m model (a surface model, so it includes tree canopy).
 
 | Flag | Purpose |
 |---|---|
-| `--bounds` | `south,west,north,east` in decimal degrees |
-| `--telemetry` | Alternative to `--bounds`: use an exported telemetry JSON's extent |
-| `--buffer` | Metres to pad in every direction (default 1000) — needed because oblique cameras see well past the flight path |
-| `--resolution` | Resample to this cell size in metres. Omit to keep source DEM resolution. Dropping from 2 m to 5 m shrinks the output ~6× with imperceptible quality loss for footprint polygons |
+| `--resolution` | `area-dem.tif` cell size in metres (default 2) |
+| `--flight-resolution` | `flight-dem` cell size in metres (default 5) — 2 m → 5 m shrinks the browser file ~6× with imperceptible quality loss for footprint polygons |
+| `--fill` | `copernicus` (default) or `none` — with `none`, gaps become the DEM's minimum elevation |
 
-**Sizing:** at the native 2 m resolution, a 12 × 11 km clip is ~100 MB. At 5 m resolution the same clip is ~6 MB. The viewer loads this file once per session — pick the largest practical area and a resolution that keeps the download reasonable.
+**Sizing:** Marathon's 12 × 9.6 km extent is 76 one-metre tiles (a 236 MB zip), giving a 38 MB `area-dem.tif` and a 15 MB `flight-dem.bin`. The viewer loads `flight-dem.bin` once per area per session, so keep it to a reasonable download.
 
-### 2. Compute per-flight visibility heatmap — once per MP4
+Related commands: `python3 dem/area_dem.py clip <area>` re-clips `flight-dem` from an existing `area-dem.tif` (e.g. at a different `--flight-resolution`), and `python3 dem/area_dem.py index` rebuilds `dem/areas/index.json` if you add or remove an area folder by hand.
 
-`compute_visibility.py` ray-casts from every sampled telemetry frame (default 1 Hz) through a 50 × 40 grid of rays across the camera FOV, accumulating `1/d²` scores wherever rays intersect the DEM. Output goes to `dem/visibility/<basename>.{bin,json}`.
+### 4. Compute per-flight visibility heatmaps — once per MP4
 
-**Batch mode (recommended) —** `process_flights.py` handles the whole pipeline for every MP4 in `mp4/`: extracts telemetry directly from each MP4 via ffmpeg, writes it to `dem/telemetry/<basename>-telemetry.json`, then invokes `compute_visibility.py` to produce the visibility files. Idempotent — skips any file whose outputs already exist.
+`compute_visibility.py` ray-casts from every sampled telemetry frame (default 1 Hz) through a 50 × 40 grid of rays across the camera FOV, accumulating `1/d²` scores wherever rays intersect the DEM. Rays pointing above horizontal are cast too — on sloping ground they hit real terrain, and dropping them left the top of the frame unscored. Hits closer than `--min-range` (default 5 m) score as if at that distance, so ground a couple of metres below a low-flying drone doesn't swamp the grid. Output goes to `dem/areas/<area>/visibility/<basename>.{bin,json}`.
+
+**Batch mode (recommended) —** `process_flights.py` finds every MP4 under `mp4/` that sits in an area folder, extracts its telemetry via ffmpeg to `dem/areas/<area>/telemetry/<basename>-telemetry.json`, then runs `compute_visibility.py` against the area's `area-dem.tif`. Idempotent — skips any file whose outputs already exist. Flights in an area without an `area-dem.tif` yet get telemetry only.
 
 ```bash
-python3 dem/process_flights.py            # process everything that's missing
-python3 dem/process_flights.py --force    # reprocess everything
+python3 dem/process_flights.py                   # every area, whatever's missing
+python3 dem/process_flights.py --area marathon   # one area
+python3 dem/process_flights.py --force           # reprocess (e.g. after a new DEM)
 ```
 
-Requires `ffmpeg` on PATH (`brew install ffmpeg` on macOS). No browser round-trip needed.
+No browser round-trip needed.
+
+**Camera calibration —** if `dem/camera-calibration.json` exists (saved from the viewer's calibration panel), `process_flights.py` passes its `pitch_offset_deg`, `yaw_offset_deg` and `fov_scale` to `compute_visibility.py` (`--pitch-offset`, `--yaw-offset`, `--fov-scale`). Each heatmap records the calibration it was made with, and `process_flights.py` recomputes any heatmap whose calibration differs from the file — no `--force` needed.
+
+```json
+{
+  "pitch_offset_deg": -4.5,
+  "yaw_offset_deg": 0,
+  "fov_scale": 1
+}
+```
 
 **Manual single-MP4 —** if you've already got a telemetry JSON (e.g. from the viewer's Export button), you can run `compute_visibility.py` directly:
 
 ```bash
-python3 dem/compute_visibility.py --telemetry dem/telemetry/2026-03-30-foo-telemetry.json
+python3 dem/compute_visibility.py \
+  --telemetry dem/areas/quoin/telemetry/2026-03-30-foo-telemetry.json \
+  --dem dem/areas/quoin/area-dem.tif \
+  --output-dir dem/areas/quoin
 ```
 
 The output basename is auto-derived by stripping `-telemetry` from the input filename; override with `--name` if needed.
 
 Processing is numpy-vectorised with a coarse-to-fine ray march; a typical 7-minute flight takes 3-5 seconds on a laptop. Every parameter (sample rate, ray grid density, step sizes, score exponent, output cell size, sensor geometry) is a CLI flag — see `--help`.
 
+### 5. Export sitewide coverage for QGIS — whenever you want a shareable layer
+
+`export_coverage.py` turns the per-flight heatmaps into a vector layer. Each video becomes a **nested stack of polygons, one per viewing-distance level**, carrying the flight's date, time and stats as attributes. Load it in QGIS beside your other layers to show colleagues where we have drone vision, from when, and how good a look we got.
+
+```bash
+python3 dem/export_coverage.py --area marathon   # -> dem/exports/marathon_drone_video_coverage_<today>.gpkg
+python3 dem/export_coverage.py                   # every area with heatmaps
+python3 dem/export_coverage.py --area marathon --output ~/Desktop/marathon.geojson
+```
+
+Output is EPSG:4326 MultiPolygon, datestamped with the day it was made so a copy sent to someone says how current it is. GeoPackage is the default: it comes out about half the size of GeoJSON and keeps `date` and `flight_start` as real date types. `--output` with another extension picks another format — `.geojson` is written directly with tidied coordinate precision; anything else OGR knows (`.shp`, `.fgb`) goes through geopandas.
+
+**Levels —** heatmap scores accumulate `1/d²` per sampled second, so a cell seen for S seconds from d metres scores `S/d²`. That makes each level readable as *"seen for at least `--min-seconds` from within `<level>` metres"*. Shorter distance means better ground detail, so the levels nest — the closest is the smallest and sits inside all the others. The default halves at each step, which puts a clean 4× jump in threshold between bands:
+
+| Level | Roughly |
+|---|---|
+| 25 m | as close as the camera gets at normal flight height — near-nadir, right under the track |
+| 50 m | close enough to pick out an individual plant |
+| 100 m | good working detail |
+| 200 m | recognisable structure — tracks, canopy gaps, erosion |
+| 400 m | distant and oblique — context only |
+
+```bash
+python3 dem/export_coverage.py --area marathon --levels 100,200,300,500  # retune the ramp
+python3 dem/export_coverage.py --area marathon --levels 300              # one feature per video
+```
+
+Flights sit around 50 m AGL, so the inner levels trace the flight lines and the outer bands fan out around them. They also open up the blind spot directly beneath the aircraft, where the camera looked ahead rather than straight down — the holes in the innermost polygons are real, not artefacts.
+
+**Styling the stack in QGIS —** because the levels nest, a *single* semi-transparent fill does the work: set the layer to one fill colour at ~25 % opacity with no stroke, and the four overlapping polygons shade themselves — palest where a flight only glimpsed the ground from 500 m, darkest over what it saw from within 100 m. For crisper bands instead, categorise on `within_m` with an opaque ramp, or load the file four times filtered to one level each if you want separate layer entries with independent opacity.
+
+Cells above a level's threshold are polygonised at the heatmap's 10 m grid, then cleaned: `--min-patch-m2` (default 2000 m²) drops coverage specks and pinholes, and `--simplify-m` (default 5 m) trims vertices — raise it for smoother outlines, set 0 to keep exact cell edges.
+
+**Attributes —** `area`, `video`, `date`, `year`, `flight_start`, `flight_end`, `duration_min`, `alt_agl_max_m`, `alt_agl_mean_m`, `seconds_sampled`, `mp4` (the path back to the source video), plus per level: `level` (1 = closest), `levels`, `within_m`, `min_seconds`, `score_threshold`, `cell_size_m` and `coverage_ha`.
+
+Dates come from the telemetry's own timestamps, not the filename; a mismatch between the two is reported as it exports. Features are written newest flight first, and widest level first within a flight so the closer levels draw on top. Flights overlap each other as well, so categorise on `year` or `date` to show when each patch was last flown.
+
 ### File layout after preprocessing
 
 ```
 drone_video_telemetry/
-  index.html         # The viewer
-  mp4/                              # Source MP4s (and companion .SRT files)
+  index.html                        # The viewer
+  mp4/
+    matrice-4E-mp4/
+      marathon/*.MP4                # Folder name = area name
+      quoin/*.MP4
   dem/
-    area-dem.tif                    # Source DEM (large, not loaded by browser)
-    preprocess_dem.py
-    compute_visibility.py
+    area_dem.py                     # Area extent, ELVIS tiles, mosaic, clip, index
     process_flights.py              # Batch orchestrator (ffmpeg + compute_visibility)
-    PLAN.md                         # Full design notes
-    flight-dem.bin / .json          # Shared clipped DEM for the viewer
-    telemetry/
-      <basename>-telemetry.json     # Extracted from MP4, or Exported from viewer
-    visibility/
-      <basename>.bin / .json        # Per-flight visibility heatmap
+    preprocess_dem.py               # Clip area-dem.tif to flight-dem
+    compute_visibility.py
+    export_coverage.py              # Per-flight coverage polygons for QGIS
+    PLAN.md                         # Original design notes
+    exports/
+      <area>_drone_video_coverage_<date>.gpkg      # Coverage polygons for QGIS
+    areas/
+      index.json                    # Area names + DEM bounds (read by the viewer)
+      marathon/
+        extent.geojson              # Area polygon (upload to ELVIS)
+        elvis-tiles.json            # ELVIS tile listing for the extent
+        elvis/                      # Downloaded ELVIS zips / tiles
+        area-dem.tif                # Mosaicked source DEM (not loaded by browser)
+        flight-dem.bin / .json      # Shared clipped DEM for the viewer
+        telemetry/
+          <basename>-telemetry.json # Extracted from MP4, or Exported from viewer
+        visibility/
+          <basename>.bin / .json    # Per-flight visibility heatmap
 ```
 
 ## Browser compatibility
@@ -297,11 +381,17 @@ Works on macOS, Windows, and Linux. Tested in Chrome and Safari; should work in 
 | `README.md` | This file |
 | `mp4/*.MP4` | DJI video files (Matrice 4E, Matrice 300, Mavic 3T, etc.) |
 | `mp4/**/*.SRT` | Companion SRT telemetry sidecar files (e.g. from M3T) |
-| `dem/area-dem.tif` | Source LiDAR DEM (not tracked, ~292 MB) |
-| `dem/preprocess_dem.py` | Clip + optionally resample the DEM for browser use |
+| `dem/area_dem.py` | Per-area extent, ELVIS tile listing, mosaic + clip, area index |
+| `dem/preprocess_dem.py` | Clip + optionally resample an area DEM for browser use |
 | `dem/compute_visibility.py` | Ray-cast visibility heatmap from telemetry + DEM |
-| `dem/process_flights.py` | Batch-process every MP4 in `mp4/` through both steps (needs ffmpeg) |
-| `dem/PLAN.md` | Full design notes for the DEM features |
-| `dem/flight-dem.{bin,json}` | Shared clipped DEM (generated) |
-| `dem/telemetry/<basename>-telemetry.json` | Exported per-flight telemetry (from viewer) |
-| `dem/visibility/<basename>.{bin,json}` | Per-flight visibility heatmap (generated) |
+| `dem/process_flights.py` | Batch-process every area MP4 under `mp4/` through telemetry + visibility (needs ffmpeg) |
+| `dem/export_coverage.py` | Export per-flight coverage polygons as a GIS layer for QGIS |
+| `dem/PLAN.md` | Original design notes for the DEM features |
+| `dem/camera-calibration.json` | Camera pitch / heading / FOV corrections saved from the viewer's calibration panel (optional) |
+| `dem/areas/index.json` | Area names and DEM bounds for the viewer (generated) |
+| `dem/areas/<area>/extent.geojson` | Area polygon used to order DEM tiles (generated) |
+| `dem/areas/<area>/area-dem.tif` | Mosaicked source DEM (generated from ELVIS tiles, not tracked) |
+| `dem/areas/<area>/flight-dem.{bin,json}` | Shared clipped DEM for the area (generated) |
+| `dem/areas/<area>/telemetry/<basename>-telemetry.json` | Per-flight telemetry (extracted, or exported from viewer) |
+| `dem/areas/<area>/visibility/<basename>.{bin,json}` | Per-flight visibility heatmap (generated) |
+| `dem/exports/<area>_drone_video_coverage_<date>.gpkg` | Per-flight coverage polygons for QGIS (generated) |

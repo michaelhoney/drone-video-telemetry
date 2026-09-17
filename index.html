@@ -226,6 +226,58 @@
     color: #999;
     line-height: 1.35;
   }
+  .calib-open-btn {
+    align-self: flex-start; margin-top: 2px;
+    background: rgba(255,160,40,0.14); color: #ffd29a; border: 1px solid rgba(255,160,40,0.4);
+    border-radius: 6px; padding: 4px 10px; font-size: 1em; cursor: pointer;
+  }
+  .calib-open-btn:hover { background: rgba(255,160,40,0.26); }
+  .calib-open-btn:disabled { opacity: 0.45; cursor: default; }
+
+  /* ── Camera calibration ── */
+  .calib-panel {
+    position: absolute; bottom: 12px; right: 12px; z-index: 1001;
+    width: 300px; max-width: calc(100% - 24px); max-height: calc(100% - 70px); overflow-y: auto;
+    display: none; flex-direction: column; gap: 8px;
+    background: rgba(15,15,26,0.92); border: 1px solid rgba(255,160,40,0.32); border-radius: 10px;
+    padding: 12px 14px; backdrop-filter: blur(6px); font-size: 0.8em; color: #ccc;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.28);
+  }
+  .calib-panel.open { display: flex; }
+  .calib-panel h4 { margin: 0; color: #ffd29a; font-size: 1.05em; font-weight: 600; }
+  .calib-help { margin: 0; color: #999; line-height: 1.35; }
+  .calib-help code { color: #ccc; }
+  .calib-row { display: grid; grid-template-columns: 92px 1fr 54px; align-items: center; gap: 8px; }
+  .calib-row input[type="range"] { width: 100%; accent-color: #ffa028; }
+  .calib-row output { text-align: right; font-variant-numeric: tabular-nums; color: #eee; }
+  .calib-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .calib-actions button {
+    background: rgba(255,255,255,0.08); color: #ddd; border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 6px; padding: 4px 9px; font-size: 1em; cursor: pointer;
+  }
+  .calib-actions button:hover { background: rgba(255,255,255,0.16); }
+  .calib-actions button:disabled { opacity: 0.45; cursor: default; }
+  .calib-actions button.primary { background: rgba(255,160,40,0.85); color: #111; border-color: transparent; }
+  .calib-source { color: #888; line-height: 1.35; }
+  .calib-json {
+    margin: 0; padding: 6px 8px; background: rgba(0,0,0,0.35); border-radius: 6px;
+    color: #ffd29a; font-size: 0.95em; white-space: pre-wrap;
+  }
+  .calib-video-overlay { position: absolute; inset: 0; z-index: 4; display: none; cursor: crosshair; overflow: hidden; }
+  .calib-video-overlay.active { display: block; }
+  .calib-frame-note {
+    position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+    background: rgba(15,15,26,0.85); color: #ffd29a; padding: 4px 10px; border-radius: 6px;
+    font-size: 0.78em; pointer-events: none; white-space: nowrap;
+  }
+  .calib-pin, .calib-map-pin {
+    box-sizing: border-box; width: 22px; height: 22px; border-radius: 50%;
+    background: rgba(255,160,40,0.92); border: 2px solid #fff; color: #111;
+    font: 700 11px/18px system-ui, sans-serif; text-align: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.55);
+  }
+  .calib-pin { position: absolute; transform: translate(-50%, -50%); pointer-events: none; }
+  .calib-pin.no-hit { background: rgba(120,120,120,0.85); }
 
   .footprint-badge {
     position: absolute; top: 12px; left: 56px; z-index: 1000;
@@ -382,6 +434,9 @@
         </button>
       </div>
       <video id="video" style="display:none"></video>
+      <div class="calib-video-overlay" id="calibVideoOverlay">
+        <div class="calib-frame-note">Calibrating — click features you can also find on the map</div>
+      </div>
       <div class="drop-zone" id="dropMp4">
         <h3>Drop DJI MP4 here</h3>
         <p>or click to browse — supports MP4, MP4+SRT pairs, or SRT alone</p>
@@ -467,6 +522,25 @@
           <button type="button" class="heatmap-palette-btn" data-palette="viridis" title="Viridis palette" aria-label="Viridis palette" aria-pressed="false" disabled></button>
         </div>
       </div>
+      <button type="button" class="calib-open-btn" id="calibOpenBtn" title="Match the map footprint to what the video shows">Calibrate camera…</button>
+    </div>
+    <div class="calib-panel" id="calibPanel" aria-label="Camera calibration">
+      <h4>Camera calibration</h4>
+      <p class="calib-help">Click a few features in the paused video that you can also find on the map — a house, a fence corner, a lone tree. Then adjust the sliders until each numbered map pin sits on its feature. Flat ground with features near the top of the frame works best.</p>
+      <div class="calib-row"><label for="calibPitch">Pitch offset</label><input type="range" id="calibPitch" min="-15" max="15" step="0.1" value="0"><output id="calibPitchOut">+0.0°</output></div>
+      <div class="calib-row"><label for="calibYaw">Heading offset</label><input type="range" id="calibYaw" min="-15" max="15" step="0.1" value="0"><output id="calibYawOut">+0.0°</output></div>
+      <div class="calib-row"><label for="calibFov">FOV scale</label><input type="range" id="calibFov" min="0.7" max="1.1" step="0.005" value="1"><output id="calibFovOut">100.0%</output></div>
+      <div class="calib-actions">
+        <button type="button" id="calibClearPins">Clear pins</button>
+        <button type="button" id="calibZero">Zero</button>
+        <button type="button" id="calibRevert">Revert to file</button>
+        <button type="button" id="calibDone" class="primary">Done</button>
+      </div>
+      <div class="calib-source" id="calibSource"></div>
+      <div class="calib-source" id="calibAltNote"></div>
+      <pre class="calib-json" id="calibJson"></pre>
+      <div class="calib-actions"><button type="button" id="calibCopy">Copy JSON</button></div>
+      <p class="calib-help">Save it as <code>dem/camera-calibration.json</code> and run <code>python3 dem/process_flights.py</code> — heatmaps made with different values are recomputed.</p>
     </div>
     <button class="debug-toggle-btn" id="debugToggleBtn" title="Toggle raw telemetry debug panel (djmd only)">RAW</button>
     <div class="debug-panel" id="debugPanel"></div>
@@ -1221,7 +1295,19 @@ function updateMap(t) {
 
 // ── Video events ──
 const video = document.getElementById('video');
-video.addEventListener('timeupdate', () => { if (telemetryReady) updateMap(video.currentTime); });
+// Drive map updates from displayed video frames where the browser supports it:
+// 'timeupdate' only fires ~4x/s, leaving the map up to 250 ms behind the video —
+// several degrees of heading during a pan, which throws the footprint off badly
+// at range. requestVideoFrameCallback gives us the exact presentation time.
+if (video.requestVideoFrameCallback) {
+  const onVideoFrame = (now, meta) => {
+    if (telemetryReady) updateMap(meta.mediaTime);
+    video.requestVideoFrameCallback(onVideoFrame);
+  };
+  video.requestVideoFrameCallback(onVideoFrame);
+} else {
+  video.addEventListener('timeupdate', () => { if (telemetryReady) updateMap(video.currentTime); });
+}
 video.addEventListener('seeked', () => { if (telemetryReady) { prevAltSample = null; lastVSpeed = 0; lastHSpeed = 0; updateMap(video.currentTime); } });
 
 // ── Custom video controls ──
@@ -1465,6 +1551,11 @@ function updateDebugPanel(s) {
 // ── DEM Loading & Camera Footprint ──
 let dem = null;
 let demLoadPromise = null;
+let demAreaName = null;         // dem/areas/<name>/ the loaded DEM came from
+let demLoadingAreaName = null;  // area whose DEM fetch is in flight
+let demAreaIndexPromise = null; // dem/areas/index.json, fetched once
+let areaLookup = 'pending';     // 'pending' | 'unavailable' (no index / file://) | 'no-match' | 'matched'
+let flightAreaLoadSeq = 0;
 let footprintLayer    = null;   // ellipse polygon
 let footprintRayLayer = null;   // principal-ray polyline
 let heatmapOverlay = null;
@@ -1475,6 +1566,7 @@ let heatmapEnabled = false;
 let heatmapAvailable = false;
 let currentBasename = null;
 let currentFlightDemCoverage = null;
+let altDatumOffset = 0;         // metres added to absAlt so takeoff sits on the DEM
 let currentHeatmapPalette = 'lava';
 
 const HEATMAP_DOT_RENDER_SCALE = 4;
@@ -1536,16 +1628,44 @@ const RAY_STYLE = {
   interactive: false
 };
 
-// Camera specs — derived from sensor geometry
-const SENSOR_W = 9.6, SENSOR_H = 7.2; // mm
+// Camera specs — derived from sensor geometry. The 35 mm-equivalent focal
+// length is quoted for the full 4:3 sensor (stills: 84° diagonal at 24 mm).
+// Video uses the full sensor width with the top and bottom cropped to the
+// video's aspect ratio (e.g. 3840×2160 from a 5280×3956 sensor).
+const SENSOR_W = 9.6, SENSOR_H = 7.2; // mm, 4:3 — only the aspect matters for FOV
 const SENSOR_DIAG = Math.sqrt(SENSOR_W * SENSOR_W + SENSOR_H * SENSOR_H);
 const CROP_FACTOR = 43.27 / SENSOR_DIAG;
+const DEFAULT_VIDEO_ASPECT = 16 / 9;  // DJI video; used when no video is loaded (SRT only)
 
-function getCameraFOV(equivFocalLen) {
+function getVideoAspect() {
+  return video.videoWidth > 0 && video.videoHeight > 0
+    ? video.videoWidth / video.videoHeight
+    : DEFAULT_VIDEO_ASPECT;
+}
+
+function getCameraFOV(equivFocalLen, frameAspect = getVideoAspect()) {
   const actualFL = equivFocalLen / CROP_FACTOR;
+  const frameH = Math.min(SENSOR_H, SENSOR_W / frameAspect);
   const hFov = 2 * Math.atan(SENSOR_W / (2 * actualFL));
-  const vFov = 2 * Math.atan(SENSOR_H / (2 * actualFL));
+  const vFov = 2 * Math.atan(frameH / (2 * actualFL));
   return { hFov, vFov }; // radians
+}
+
+// Camera calibration (set in the calibration panel): offsets added to the gimbal
+// pitch and heading, and a scale on the image-plane half-width/height tangents
+// (like a focal-length tweak; < 1 narrows the view).
+const DEFAULT_CAMERA_CALIBRATION = { pitch_offset_deg: 0, yaw_offset_deg: 0, fov_scale: 1 };
+let cameraCalibration = { ...DEFAULT_CAMERA_CALIBRATION };
+
+function calibratedCamera(s) {
+  const { hFov, vFov } = getCameraFOV(parseFloat(s.focalLen) || 24);
+  const scale = cameraCalibration.fov_scale;
+  return {
+    hFov: 2 * Math.atan(Math.tan(hFov / 2) * scale),
+    vFov: 2 * Math.atan(Math.tan(vFov / 2) * scale),
+    yaw: s.yaw + cameraCalibration.yaw_offset_deg,
+    pitch: s.pitch + cameraCalibration.pitch_offset_deg,
+  };
 }
 
 function getFootprintStyle() {
@@ -1572,8 +1692,34 @@ function summarizeDemCoverage() {
   };
 }
 
+// At takeoff the aircraft sits on the ground (rel_alt 0), so its abs_alt should equal
+// the DEM there. DJI's barometric datum is often several metres out, which scales every
+// ray by the same fraction, so shift abs_alt to put takeoff on the terrain.
+function computeAltDatumOffset() {
+  if (!dem || !telemetry.length) return 0;
+  const onGround = telemetry.find(s =>
+    Number.isFinite(s.relAlt) && Math.abs(s.relAlt) < 0.5 &&
+    Number.isFinite(s.absAlt) && Math.abs(s.lat) > 1e-6);
+  if (!onGround) return 0;
+  const demZ = getElevation(onGround.lat, onGround.lon);
+  if (!Number.isFinite(demZ)) return 0;
+  const offset = demZ - (onGround.absAlt - onGround.relAlt);
+  // An implausible offset means the takeoff fix or the DEM is wrong — leave telemetry alone.
+  return Math.abs(offset) > 50 ? 0 : offset;
+}
+
+// Camera height for DEM ray-casting, on the DEM's datum.
+function demCameraAltitude(s) {
+  return s.absAlt + altDatumOffset;
+}
+
 function refreshDemCoverageState() {
   currentFlightDemCoverage = summarizeDemCoverage();
+  const previousOffset = altDatumOffset;
+  altDatumOffset = computeAltDatumOffset();
+  if (altDatumOffset !== previousOffset) {
+    console.log('[DEM] Altitude datum offset at takeoff:', altDatumOffset.toFixed(1), 'm');
+  }
 }
 
 function updateHeatmapPaletteButtons() {
@@ -1616,6 +1762,9 @@ function refreshOverlayUi() {
     } else if (demLoaded && demPartial) {
       footprintNote.textContent = 'This flight only partly overlaps the loaded DEM. The footprint switches to terrain-aware mode only while inside DEM coverage.';
       footprintBadge.innerHTML = '<strong>Estimated footprint</strong><small>Outside DEM coverage for this frame</small>';
+    } else if (areaLookup === 'no-match') {
+      footprintNote.textContent = 'No DEM area in dem/areas/ covers this flight, so the footprint uses rel altitude on a flat-ground assumption.';
+      footprintBadge.innerHTML = '<strong>Estimated footprint</strong><small>No DEM area covers this flight</small>';
     } else {
       footprintNote.textContent = 'Using rel altitude on a flat-ground assumption. Load a DEM over HTTP for terrain-aware intersections.';
       footprintBadge.innerHTML = '<strong>Estimated footprint</strong><small>Flat-ground assumption from rel altitude</small>';
@@ -1653,35 +1802,90 @@ function setHeatmapAvailable(available) {
   refreshOverlayUi();
 }
 
-async function loadDEM() {
-  // Shared across all flights — only fetch once.
-  if (dem) {
+function loadAreaIndex() {
+  // dem/areas/index.json lists every area's flight-dem bounds (written by dem/area_dem.py).
+  if (!demAreaIndexPromise) {
+    demAreaIndexPromise = fetch('dem/areas/index.json')
+      .then(resp => resp.ok ? resp.json() : null)
+      .then(index => index?.areas || null)
+      .catch(() => null);
+  }
+  return demAreaIndexPromise;
+}
+
+// Pick the area whose DEM bounds contain the most of this flight's positions.
+function findAreaForFlight(areas) {
+  if (!areas || !telemetry.length) return null;
+  const step = Math.max(1, Math.floor(telemetry.length / 500));
+  let best = null, bestCount = 0;
+  for (const area of areas) {
+    const b = area.bounds;
+    let count = 0;
+    for (let i = 0; i < telemetry.length; i += step) {
+      const s = telemetry[i];
+      if (s.lat >= b.south && s.lat <= b.north && s.lon >= b.west && s.lon <= b.east) count++;
+    }
+    if (count > bestCount) { best = area; bestCount = count; }
+  }
+  return best;
+}
+
+async function loadFlightAreaData(basename) {
+  const seq = ++flightAreaLoadSeq;
+  const areas = await loadAreaIndex();
+  if (seq !== flightAreaLoadSeq) return;  // a newer flight was loaded meanwhile
+  const area = findAreaForFlight(areas);
+  areaLookup = !areas ? 'unavailable' : (area ? 'matched' : 'no-match');
+  if (areas) console.log('[DEM] Area for this flight:', area ? area.name : 'none');
+  loadDEM(area);
+  loadHeatmap(basename, area);
+}
+
+async function loadDEM(area) {
+  if (!area) {
+    dem = null;
+    demAreaName = null;
+    demLoadingAreaName = null;
+    demLoadPromise = null;
+    refreshDemCoverageState();
+    setFootprintMode(FOOTPRINT_MODE_FLAT);
+    refreshOverlayUi();
+    return null;
+  }
+  // Flights in the same area share one DEM — only fetch it once.
+  if (dem && demAreaName === area.name) {
     refreshDemCoverageState();
     setFootprintMode(currentFlightDemCoverage?.hasCoverage ? FOOTPRINT_MODE_DEM : FOOTPRINT_MODE_FLAT);
     if (telemetryReady) updateMap(video.currentTime);
     return dem;
   }
-  if (demLoadPromise) return demLoadPromise;
+  if (demLoadPromise && demLoadingAreaName === area.name) return demLoadPromise;
+  dem = null;
+  demAreaName = null;
+  demLoadingAreaName = area.name;
+  const areaBase = `dem/areas/${encodeURIComponent(area.name)}`;
   demLoadPromise = (async () => {
     try {
-      const metaResp = await fetch('dem/flight-dem.json');
+      const metaResp = await fetch(`${areaBase}/flight-dem.json`);
       if (!metaResp.ok) {
-        console.log('[DEM] flight-dem.json not found, using flat-ground footprint estimate');
+        console.log(`[DEM] ${areaBase}/flight-dem.json not found, using flat-ground footprint estimate`);
         setFootprintMode(FOOTPRINT_MODE_FLAT);
         return null;
       }
       const meta = await metaResp.json();
-      const binResp = await fetch('dem/flight-dem.bin');
+      const binResp = await fetch(`${areaBase}/flight-dem.bin`);
       if (!binResp.ok) {
-        console.log('[DEM] flight-dem.bin not found, using flat-ground footprint estimate');
+        console.log(`[DEM] ${areaBase}/flight-dem.bin not found, using flat-ground footprint estimate`);
         setFootprintMode(FOOTPRINT_MODE_FLAT);
         return null;
       }
       const buf = await binResp.arrayBuffer();
+      if (demLoadingAreaName !== area.name) return null;  // superseded by a flight in another area
       const elevations = new Float32Array(buf);
       dem = { ...meta, elevations };
+      demAreaName = area.name;
       refreshDemCoverageState();
-      console.log('[DEM] Loaded:', meta.width, 'x', meta.height, '(' + elevations.length + ' cells)');
+      console.log('[DEM] Loaded area', area.name + ':', meta.width, 'x', meta.height, '(' + elevations.length + ' cells)');
       if (telemetryReady && currentFlightDemCoverage && !currentFlightDemCoverage.hasCoverage) {
         console.log('[DEM] Loaded, but this flight does not overlap DEM coverage; staying in flat-ground mode');
       }
@@ -1737,10 +1941,8 @@ function computeBoresightPoint(lat, lon, absAlt, relAlt, yawDeg, pitchDeg) {
   const MAX_RANGE = 5000;
   let range;
 
-  if (lookU >= -0.01) {
-    // Camera looking up or nearly horizontal — pin at MAX_RANGE for display
-    range = MAX_RANGE;
-  } else if (useDem) {
+  if (useDem) {
+    // March even when the ray points up — terrain ahead can rise into it.
     const STEP = 20;
     range = MAX_RANGE;
     for (let s = 1; s * STEP <= MAX_RANGE; s++) {
@@ -1749,6 +1951,9 @@ function computeBoresightPoint(lat, lon, absAlt, relAlt, yawDeg, pitchDeg) {
       if (Number.isNaN(elev)) break;
       if (absAlt + lookU * d <= elev) { range = d; break; }
     }
+  } else if (lookU >= -0.01) {
+    // No DEM and the ray is at or above the horizon — pin at MAX_RANGE for display
+    range = MAX_RANGE;
   } else {
     range = Math.min(H / (-lookU), MAX_RANGE);
   }
@@ -1781,7 +1986,7 @@ function ellipseLatLngs(centerLat, centerLon, semiAlong, semiCross, azimuthDeg, 
   return pts;
 }
 
-function buildFootprintRays(lat, yawDeg, pitchDeg, hFov, vFov) {
+function buildFootprintRays(lat, yawDeg, pitchDeg, hFov, vFov, samplePoints) {
   const DEG2RAD = Math.PI / 180;
   const yaw = yawDeg * DEG2RAD;
   const pitch = pitchDeg * DEG2RAD;
@@ -1808,17 +2013,21 @@ function buildFootprintRays(lat, yawDeg, pitchDeg, hFov, vFov) {
   const hHalf = Math.tan(hFov / 2);
   const vHalf = Math.tan(vFov / 2);
 
-  // Sample edge points: 4 corners + intermediates along each edge
-  const edgePoints = [];
-  const N = 6; // points per edge
-  // Bottom edge (v = -1)
-  for (let i = 0; i <= N; i++) edgePoints.push([i / N * 2 - 1, -1]);
-  // Right edge (u = 1)
-  for (let i = 1; i <= N; i++) edgePoints.push([1, i / N * 2 - 1]);
-  // Top edge (v = 1), reversed
-  for (let i = N - 1; i >= 0; i--) edgePoints.push([i / N * 2 - 1, 1]);
-  // Left edge (u = -1), reversed
-  for (let i = N - 1; i >= 1; i--) edgePoints.push([-1, i / N * 2 - 1]);
+  // Image positions to cast rays through (u: -1 left … 1 right, v: -1 bottom … 1 top).
+  // Default: 4 corners + intermediates along each edge.
+  let edgePoints = samplePoints;
+  if (!edgePoints) {
+    edgePoints = [];
+    const N = 6; // points per edge
+    // Bottom edge (v = -1)
+    for (let i = 0; i <= N; i++) edgePoints.push([i / N * 2 - 1, -1]);
+    // Right edge (u = 1)
+    for (let i = 1; i <= N; i++) edgePoints.push([1, i / N * 2 - 1]);
+    // Top edge (v = 1), reversed
+    for (let i = N - 1; i >= 0; i--) edgePoints.push([i / N * 2 - 1, 1]);
+    // Left edge (u = -1), reversed
+    for (let i = N - 1; i >= 1; i--) edgePoints.push([-1, i / N * 2 - 1]);
+  }
 
   const rays = [];
   for (const [u, v] of edgePoints) {
@@ -1846,12 +2055,48 @@ function pushProjectedPoint(polygon, lat, lon, dE, dN, M_PER_DEG_LAT, M_PER_DEG_
   polygon.push([pLat, pLon]);
 }
 
-function computeTerrainFootprint(lat, lon, absAlt, yawDeg, pitchDeg, hFov, vFov) {
-  const { M_PER_DEG_LAT, M_PER_DEG_LON, rays } = buildFootprintRays(lat, yawDeg, pitchDeg, hFov, vFov);
-  const polygon = [];
+// March a unit camera ray (east, north, up components) out from the camera until it
+// meets the DEM. Returns { point: [lat, lon], hit }, where hit is false when the ray
+// left DEM coverage or ran out of range — then point is the last place we could still
+// see terrain, so the footprint stays bounded by what the DEM actually covers instead
+// of shooting off to the horizon. point is null if the ray never reached the DEM.
+function marchRayToTerrain(lat, lon, absAlt, dE, dN, dU, M_PER_DEG_LAT, M_PER_DEG_LON) {
   const MAX_RANGE = 20000;     // march this far looking for a terrain hit
   const COARSE_STEP = 20;      // coarse pass — find approximate intersection
   const FINE_STEP = 2;         // refine around the coarse hit, matches DEM resolution
+
+  // Coarse march: find the first step where the ray dips to or below the DEM.
+  let coarseHit = -1;
+  let lastInside = null;
+  for (let s = 1; s * COARSE_STEP <= MAX_RANGE; s++) {
+    const dist = s * COARSE_STEP;
+    const pU = absAlt + dU * dist;
+    const pLat = lat + (dN * dist) / M_PER_DEG_LAT;
+    const pLon = lon + (dE * dist) / M_PER_DEG_LON;
+    const demZ = getElevation(pLat, pLon);
+    if (Number.isNaN(demZ)) return { point: lastInside, hit: false };  // exited DEM coverage
+    lastInside = [pLat, pLon];
+    if (pU <= demZ) { coarseHit = s; break; }
+  }
+  if (coarseHit < 0) return { point: lastInside, hit: false };  // above terrain for MAX_RANGE
+
+  // Refine between (coarseHit-1)*COARSE_STEP and coarseHit*COARSE_STEP.
+  const startDist = Math.max((coarseHit - 1) * COARSE_STEP, 1);
+  const endDist = coarseHit * COARSE_STEP;
+  for (let d = startDist; d <= endDist; d += FINE_STEP) {
+    const pU = absAlt + dU * d;
+    const pLat = lat + (dN * d) / M_PER_DEG_LAT;
+    const pLon = lon + (dE * d) / M_PER_DEG_LON;
+    const demZ = getElevation(pLat, pLon);
+    if (Number.isNaN(demZ)) return { point: lastInside, hit: false };
+    if (pU <= demZ) return { point: [pLat, pLon], hit: true };
+  }
+  return { point: lastInside, hit: false };
+}
+
+function computeTerrainFootprint(lat, lon, absAlt, yawDeg, pitchDeg, hFov, vFov) {
+  const { M_PER_DEG_LAT, M_PER_DEG_LON, rays } = buildFootprintRays(lat, yawDeg, pitchDeg, hFov, vFov);
+  const polygon = [];
   const HORIZON_DIST = 50000;  // for rays that never hit terrain, project this far
                                // so the polygon reaches effectively "infinite" range
 
@@ -1862,37 +2107,13 @@ function computeTerrainFootprint(lat, lon, absAlt, yawDeg, pitchDeg, hFov, vFov)
       pushProjectedPoint(polygon, lat, lon, dE, dN, M_PER_DEG_LAT, M_PER_DEG_LON, HORIZON_DIST);
     };
 
-    // Rays pointing above horizontal never hit the ground — extend to the horizon.
-    if (dU > 0.001) { projectToHorizon(); continue; }
+    // Rays pointing above horizontal can still meet rising ground (a hillside ahead,
+    // the far side of a valley), so march them against the DEM as well.
 
-    // Coarse march: find the first step where the ray dips to or below the DEM.
-    let coarseHit = -1;
-    for (let s = 1; s * COARSE_STEP <= MAX_RANGE; s++) {
-      const dist = s * COARSE_STEP;
-      const pU = absAlt + dU * dist;
-      const pLat = lat + (dN * dist) / M_PER_DEG_LAT;
-      const pLon = lon + (dE * dist) / M_PER_DEG_LON;
-      const demZ = getElevation(pLat, pLon);
-      if (Number.isNaN(demZ)) break;  // exited DEM coverage — treat as no hit
-      if (pU <= demZ) { coarseHit = s; break; }
-    }
-
-    let hit = null;
-    if (coarseHit > 0) {
-      // Refine between (coarseHit-1)*COARSE_STEP and coarseHit*COARSE_STEP.
-      const startDist = Math.max((coarseHit - 1) * COARSE_STEP, 1);
-      const endDist = coarseHit * COARSE_STEP;
-      for (let d = startDist; d <= endDist; d += FINE_STEP) {
-        const pU = absAlt + dU * d;
-        const pLat = lat + (dN * d) / M_PER_DEG_LAT;
-        const pLon = lon + (dE * d) / M_PER_DEG_LON;
-        const demZ = getElevation(pLat, pLon);
-        if (Number.isNaN(demZ)) break;
-        if (pU <= demZ) { hit = [pLat, pLon]; break; }
-      }
-    }
-
-    if (hit) polygon.push(hit);
+    // A ray that leaves DEM coverage stops at the edge of what we know; only rays that
+    // never reached the DEM at all fall back to the horizon.
+    const march = marchRayToTerrain(lat, lon, absAlt, dE, dN, dU, M_PER_DEG_LAT, M_PER_DEG_LON);
+    if (march.point) polygon.push(march.point);
     else projectToHorizon();
   }
   return polygon;
@@ -2068,7 +2289,7 @@ function renderHeatmapOverlay() {
   return dotCount;
 }
 
-async function loadHeatmap(basename) {
+async function loadHeatmap(basename, area) {
   // Tear down any previous flight's heatmap before loading a new one.
   if (heatmapOverlay) {
     map.removeLayer(heatmapOverlay);
@@ -2078,11 +2299,13 @@ async function loadHeatmap(basename) {
   heatmapScores = null;
   setHeatmapAvailable(false);
   if (!basename) { console.log('[Heatmap] No basename — skipping'); return; }
+  if (!area) { console.log('[Heatmap] No DEM area for this flight — skipping'); return; }
   try {
-    const jsonUrl = `dem/visibility/${encodeURIComponent(basename)}.json`;
-    const binUrl  = `dem/visibility/${encodeURIComponent(basename)}.bin`;
+    const visibilityBase = `dem/areas/${encodeURIComponent(area.name)}/visibility`;
+    const jsonUrl = `${visibilityBase}/${encodeURIComponent(basename)}.json`;
+    const binUrl  = `${visibilityBase}/${encodeURIComponent(basename)}.bin`;
     const metaResp = await fetch(jsonUrl);
-    if (!metaResp.ok) { console.log(`[Heatmap] ${jsonUrl} not found — run compute_visibility.py --name "${basename}"`); return; }
+    if (!metaResp.ok) { console.log(`[Heatmap] ${jsonUrl} not found — run: python3 dem/process_flights.py --area ${area.name}`); return; }
     const meta = await metaResp.json();
     const binResp = await fetch(binUrl);
     if (!binResp.ok) { console.log(`[Heatmap] ${binUrl} not found`); return; }
@@ -2204,8 +2427,7 @@ updateMap = function(t) {
   const s = sampleAt(t);
   if (!s) return;
 
-  const fl = parseFloat(s.focalLen) || 24;
-  const { hFov, vFov } = getCameraFOV(fl);
+  const { hFov, vFov, yaw: camYaw, pitch: camPitch } = calibratedCamera(s);
   const useDem = isPointInsideDemBounds(s.lat, s.lon);
   setFootprintMode(useDem ? FOOTPRINT_MODE_DEM : FOOTPRINT_MODE_FLAT);
   const style = getFootprintStyle();
@@ -2213,14 +2435,15 @@ updateMap = function(t) {
   if (currentTelemetryPath !== PATH_TARGET_POS) {
     // ── Path 1 / 3 (drone position): heading = aircraft yaw ──
     // Principal ray: drone → boresight centre
-    const bs = computeBoresightPoint(s.lat, s.lon, s.absAlt, s.relAlt, s.yaw, s.pitch);
+    const camAlt = demCameraAltitude(s);
+    const bs = computeBoresightPoint(s.lat, s.lon, camAlt, s.relAlt, camYaw, camPitch);
     const rayPts = bs ? [[s.lat, s.lon], [bs.lat, bs.lon]] : [];
     footprintRayLayer = syncPolyline(footprintRayLayer, rayPts, RAY_STYLE);
 
     // Accurate polygon from edge-ray intersections with flat ground or DEM
     const poly = useDem
-      ? computeTerrainFootprint(s.lat, s.lon, s.absAlt, s.yaw, s.pitch, hFov, vFov)
-      : computeFlatFootprint(s.lat, s.lon, s.relAlt, s.yaw, s.pitch, hFov, vFov);
+      ? computeTerrainFootprint(s.lat, s.lon, camAlt, camYaw, camPitch, hFov, vFov)
+      : computeFlatFootprint(s.lat, s.lon, s.relAlt, camYaw, camPitch, hFov, vFov);
     if (poly.length >= 3) {
       footprintLayer = syncPolygon(footprintLayer, poly, style);
     } else {
@@ -2252,10 +2475,243 @@ initFlightPath = function() {
   if (footprintRayLayer) footprintRayLayer.setLatLngs([]);
   refreshDemCoverageState();
   setFootprintMode(FOOTPRINT_MODE_FLAT);
+  areaLookup = 'pending';
   refreshOverlayUi();
-  loadDEM();
-  loadHeatmap(currentBasename);
+  loadFlightAreaData(currentBasename);
 };
+
+// ── Camera calibration mode ──
+// Pause on a frame, click features in the video that are identifiable on the map,
+// and adjust pitch / heading / FOV until the matching map pins land on them.
+(function() {
+  const STORAGE_KEY = 'droneVideoTelemetry.cameraCalibration';
+  const CALIBRATION_FILE = 'dem/camera-calibration.json';
+  const MAX_PINS = 4;
+
+  const panel     = document.getElementById('calibPanel');
+  const openBtn   = document.getElementById('calibOpenBtn');
+  const overlay   = document.getElementById('calibVideoOverlay');
+  const sourceEl  = document.getElementById('calibSource');
+  const jsonEl    = document.getElementById('calibJson');
+  const revertBtn = document.getElementById('calibRevert');
+  const copyBtn   = document.getElementById('calibCopy');
+  const signed = v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}°`;
+  const sliders = {
+    pitch_offset_deg: { input: document.getElementById('calibPitch'), output: document.getElementById('calibPitchOut'), digits: 1, format: signed },
+    yaw_offset_deg:   { input: document.getElementById('calibYaw'),   output: document.getElementById('calibYawOut'),   digits: 1, format: signed },
+    fov_scale:        { input: document.getElementById('calibFov'),   output: document.getElementById('calibFovOut'),   digits: 3, format: v => `${(v * 100).toFixed(1)}%` },
+  };
+
+  let fileCalibration = null;  // dem/camera-calibration.json, when it can be fetched
+  let source = 'none';         // where cameraCalibration came from: 'none' | 'file' | 'browser'
+  let pins = [];               // { u, v, el, marker }
+  let pinCount = 0;
+
+  const roundTo = (v, digits) => Math.round(v * 10 ** digits) / 10 ** digits;
+
+  function sanitize(cal) {
+    const out = { ...DEFAULT_CAMERA_CALIBRATION };
+    for (const key of Object.keys(out)) {
+      if (Number.isFinite(cal?.[key])) out[key] = roundTo(cal[key], sliders[key].digits);
+    }
+    return out;
+  }
+  const sameCalibration = (a, b) => JSON.stringify(sanitize(a)) === JSON.stringify(sanitize(b));
+
+  function saveToBrowser() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(cameraCalibration)); } catch (e) { /* storage unavailable */ }
+  }
+  function clearBrowser() {
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* storage unavailable */ }
+  }
+
+  function syncPanel() {
+    for (const [key, s] of Object.entries(sliders)) {
+      s.input.value = cameraCalibration[key];
+      s.output.textContent = s.format(cameraCalibration[key]);
+    }
+    jsonEl.textContent = JSON.stringify(cameraCalibration, null, 2);
+    if (source === 'file') {
+      sourceEl.textContent = `Loaded from ${CALIBRATION_FILE}.`;
+    } else if (source === 'browser') {
+      sourceEl.textContent = fileCalibration && sameCalibration(fileCalibration, cameraCalibration)
+        ? `Saved in this browser; matches ${CALIBRATION_FILE}.`
+        : `Saved in this browser only${fileCalibration ? ` (differs from ${CALIBRATION_FILE})` : ''}. Copy it into ${CALIBRATION_FILE} to use it for heatmaps.`;
+    } else {
+      sourceEl.textContent = 'No calibration yet — using the raw gimbal angles.';
+    }
+    const altNote = document.getElementById('calibAltNote');
+    altNote.textContent = !dem ? ''
+      : Math.abs(altDatumOffset) < 0.05
+        ? 'Altitude datum: telemetry already matches the DEM at takeoff.'
+        : `Altitude datum: camera ${altDatumOffset > 0 ? 'raised' : 'lowered'} ${Math.abs(altDatumOffset).toFixed(1)} m so takeoff sits on the DEM.`;
+    revertBtn.disabled = !fileCalibration;
+  }
+
+  function applyCalibration(cal, newSource) {
+    cameraCalibration = sanitize(cal);
+    source = newSource;
+    syncPanel();
+    if (telemetryReady) updateMap(video.currentTime);
+    refreshPins();
+  }
+
+  // Where the video frame is drawn inside the overlay, allowing for object-fit cover/contain.
+  function videoContentBox() {
+    const o = overlay.getBoundingClientRect();
+    const r = video.getBoundingClientRect();
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const fit = getComputedStyle(video).objectFit;
+    const scale = (fit === 'cover' ? Math.max : Math.min)(r.width / vw, r.height / vh);
+    const w = vw * scale, h = vh * scale;
+    return { left: r.left - o.left + (r.width - w) / 2, top: r.top - o.top + (r.height - h) / 2, width: w, height: h };
+  }
+
+  // Ground point seen at image position (u, v) for telemetry sample s, or null (sky / off the DEM).
+  function groundPointAtImage(s, u, v) {
+    const cam = calibratedCamera(s);
+    const { M_PER_DEG_LAT, M_PER_DEG_LON, rays } = buildFootprintRays(s.lat, cam.yaw, cam.pitch, cam.hFov, cam.vFov, [[u, v]]);
+    const { dE, dN, dU } = rays[0];
+    if (isPointInsideDemBounds(s.lat, s.lon)) {
+      const march = marchRayToTerrain(s.lat, s.lon, demCameraAltitude(s), dE, dN, dU, M_PER_DEG_LAT, M_PER_DEG_LON);
+      return march.hit ? march.point : null;  // a pin needs a real terrain hit
+    }
+    if (dU >= -0.001 || !(s.relAlt > 0)) return null;  // flat-ground fallback: no hit above the horizon
+    const dist = s.relAlt / -dU;
+    return [s.lat + (dN * dist) / M_PER_DEG_LAT, s.lon + (dE * dist) / M_PER_DEG_LON];
+  }
+
+  function refreshPins() {
+    if (!pins.length) return;
+    const s = telemetryReady ? sampleAt(video.currentTime) : null;
+    const box = video.videoWidth ? videoContentBox() : null;
+    for (const pin of pins) {
+      if (box) {
+        pin.el.style.left = `${box.left + (pin.u + 1) / 2 * box.width}px`;
+        pin.el.style.top  = `${box.top + (1 - pin.v) / 2 * box.height}px`;
+      }
+      const hit = s ? groundPointAtImage(s, pin.u, pin.v) : null;
+      pin.el.classList.toggle('no-hit', !hit);
+      if (hit) {
+        pin.marker.setLatLng(hit);
+        if (!map.hasLayer(pin.marker)) pin.marker.addTo(map);
+      } else if (map.hasLayer(pin.marker)) {
+        map.removeLayer(pin.marker);
+      }
+    }
+  }
+
+  function addPin(u, v) {
+    if (pins.length >= MAX_PINS) {
+      const oldest = pins.shift();
+      oldest.el.remove();
+      map.removeLayer(oldest.marker);
+    }
+    const label = String(pinCount % MAX_PINS + 1);
+    pinCount++;
+    const el = document.createElement('div');
+    el.className = 'calib-pin';
+    el.textContent = label;
+    overlay.appendChild(el);
+    const marker = L.marker([0, 0], {
+      icon: L.divIcon({ className: '', html: `<div class="calib-map-pin">${label}</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }),
+      interactive: false, keyboard: false,
+    });
+    pins.push({ u, v, el, marker });
+    refreshPins();
+  }
+
+  function clearPins() {
+    for (const pin of pins) {
+      pin.el.remove();
+      map.removeLayer(pin.marker);
+    }
+    pins = [];
+    pinCount = 0;
+  }
+
+  function openCalibration() {
+    if (!telemetryReady || currentTelemetryPath === PATH_TARGET_POS) return;
+    video.pause();
+    panel.classList.add('open');
+    overlay.classList.toggle('active', video.videoWidth > 0);
+    openBtn.disabled = true;
+    syncPanel();
+  }
+
+  function closeCalibration() {
+    clearPins();
+    panel.classList.remove('open');
+    overlay.classList.remove('active');
+    openBtn.disabled = false;
+  }
+
+  overlay.addEventListener('click', e => {
+    e.stopPropagation();  // don't toggle play/pause
+    if (!video.videoWidth) return;
+    const o = overlay.getBoundingClientRect();
+    const box = videoContentBox();
+    const x = (e.clientX - o.left - box.left) / box.width;
+    const y = (e.clientY - o.top - box.top) / box.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return;  // letterbox bars
+    addPin(2 * x - 1, 1 - 2 * y);
+  });
+
+  for (const [key, s] of Object.entries(sliders)) {
+    s.input.addEventListener('input', () => {
+      applyCalibration({ ...cameraCalibration, [key]: parseFloat(s.input.value) }, 'browser');
+      saveToBrowser();
+    });
+  }
+  openBtn.addEventListener('click', openCalibration);
+  document.getElementById('calibDone').addEventListener('click', closeCalibration);
+  document.getElementById('calibClearPins').addEventListener('click', clearPins);
+  document.getElementById('calibZero').addEventListener('click', () => {
+    applyCalibration(DEFAULT_CAMERA_CALIBRATION, 'browser');
+    saveToBrowser();
+  });
+  revertBtn.addEventListener('click', () => {
+    if (!fileCalibration) return;
+    clearBrowser();
+    applyCalibration(fileCalibration, 'file');
+  });
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(jsonEl.textContent + '\n');
+      copyBtn.textContent = 'Copied';
+    } catch (e) {
+      copyBtn.textContent = 'Copy failed — select the text';
+    }
+    setTimeout(() => { copyBtn.textContent = 'Copy JSON'; }, 1800);
+  });
+
+  // Pins belong to the paused frame; drop them once the frame changes.
+  video.addEventListener('play', clearPins);
+  video.addEventListener('seeked', clearPins);
+  new ResizeObserver(refreshPins).observe(overlay);
+
+  const _initFlightPathBeforeCalibration = initFlightPath;
+  initFlightPath = function() {
+    closeCalibration();
+    _initFlightPathBeforeCalibration();
+    openBtn.disabled = currentTelemetryPath === PATH_TARGET_POS;
+    openBtn.title = openBtn.disabled
+      ? 'Calibration needs drone-position telemetry (not available for this file)'
+      : 'Match the map footprint to what the video shows';
+  };
+
+  (async function loadInitialCalibration() {
+    try {
+      const resp = await fetch(CALIBRATION_FILE);
+      if (resp.ok) fileCalibration = sanitize(await resp.json());
+    } catch (e) { /* file:// page or no calibration file */ }
+    let stored = null;
+    try { stored = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch (e) { /* storage unavailable */ }
+    if (stored) applyCalibration(stored, 'browser');
+    else if (fileCalibration) applyCalibration(fileCalibration, 'file');
+    else applyCalibration(DEFAULT_CAMERA_CALIBRATION, 'none');
+  })();
+})();
 
 // ── v0.6 Layout: side-by-side & drag handles ──
 (function() {

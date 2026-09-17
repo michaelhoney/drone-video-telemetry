@@ -4,8 +4,8 @@
     {
       "name": "viewer",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8000"],
-      "port": 8000
+      "runtimeArgs": ["-m", "http.server", "5002"],
+      "port": 5002
     }
   ]
 }
