@@ -153,20 +153,23 @@ def video_frame_size(mp4_path):
     return size if re.fullmatch(r"\d+x\d+", size) else None
 
 
-def run_compute_visibility(telemetry_json, area, mp4_path, calibration):
-    """Invoke compute_visibility.py as a subprocess against the area's DEM."""
+def run_compute_visibility(telemetry_json, area, mp4_path, calibration, output_dir=None, quiet=False):
+    """Invoke compute_visibility.py as a subprocess against the area's DEM.
+
+    Output goes to <output_dir>/visibility/, by default the area folder's.
+    """
     d = area_dir(area)
     cmd = [sys.executable, str(COMPUTE_VIS),
            "--telemetry", str(telemetry_json),
            "--dem", str(d / "area-dem.tif"),
-           "--output-dir", str(d)]
+           "--output-dir", str(output_dir or d)]
     for key, flag in CALIBRATION_FLAGS.items():
         cmd += [flag, str(calibration[key])]
     frame_size = video_frame_size(mp4_path)
     if frame_size:
         cmd += ["--frame-aspect", frame_size]
     print(f"  computing visibility for {telemetry_json.name} ...")
-    result = subprocess.run(cmd, check=False)
+    result = subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL if quiet else None)
     return result.returncode == 0
 
 

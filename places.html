@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Places editor</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
+<style>
+  :root {
+    --bg: #15181c; --panel: #1d2126; --line: #2e343b; --text: #e6e8ea; --muted: #8b939c;
+    --seed: #f5a524; --confirmed: #37c6e8; --selected: #ffffff; --danger: #e5484d;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { display: grid; grid-template-rows: auto 1fr; grid-template-columns: 1fr 340px; }
+  header { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 14px; margin: 0 8px 0 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  #map { grid-row: 2; grid-column: 1; }
+  aside { grid-row: 2; grid-column: 2; overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line); }
+  button, select, input, textarea { font: inherit; color: var(--text); background: #262b31;
+    border: 1px solid var(--line); border-radius: 6px; }
+  button { padding: 5px 10px; cursor: pointer; }
+  button:hover { border-color: #4a525b; }
+  button.primary { background: #1f5e6e; border-color: #2b7a8e; }
+  button.primary.dirty { background: #8a5a12; border-color: #b07418; }
+  button.active { background: #2b7a8e; }
+  select { padding: 4px 6px; }
+  label.toggle { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); cursor: pointer; }
+  #status { color: var(--muted); font-size: 12px; }
+  #banner { display: none; position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 1000;
+    max-width: calc(100% - 32px); padding: 8px 12px; border-radius: 8px; background: #3d2e0f; color: #f5d08a;
+    box-shadow: 0 4px 16px rgba(0,0,0,.5); }
+  #banner button { margin-left: 8px; }
+  .list-head { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 12px 6px; color: var(--muted); }
+  .place { border-top: 1px solid var(--line); padding: 8px 12px; cursor: pointer; }
+  .place.selected { background: #242a30; box-shadow: inset 3px 0 0 var(--selected); }
+  .place .row { display: flex; gap: 6px; align-items: center; }
+  .place input.name { flex: 1; padding: 4px 6px; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .place .meta { color: var(--muted); font-size: 11px; margin: 4px 0 0 16px; }
+  .place .detail { display: none; margin: 8px 0 0 16px; }
+  .place.selected .detail { display: block; }
+  .place textarea { width: 100%; min-height: 44px; padding: 4px 6px; resize: vertical; }
+  .place .actions { display: flex; gap: 6px; margin-top: 6px; }
+  .place .actions .delete { margin-left: auto; color: var(--danger); }
+  .help { padding: 10px 12px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); }
+  .help code { color: var(--text); }
+  .paddock-label { background: none; border: none; box-shadow: none; color: #fff; font-size: 11px;
+    text-shadow: 0 0 3px #000, 0 0 3px #000; padding: 0; }
+  .paddock-label::before { display: none; }
+  .hide-paddock-labels .paddock-label { display: none; }
+  .place-label { background: rgba(0,0,0,.65); border: none; color: #fff; font-weight: 600; font-size: 12px; box-shadow: none; }
+  .place-label::before { display: none; }
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 60vh 1fr; }
+    aside { grid-row: 3; grid-column: 1; border-left: none; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Places</h1>
+  <select id="area" title="Area"></select>
+  <button id="addPolygon" title="Draw a polygon (click vertices, click the first to finish)">＋ Polygon</button>
+  <button id="addCircle" title="Place a circle (click and drag)">＋ Circle</button>
+  <label class="toggle"><input type="checkbox" id="showPaddocks" checked> paddocks</label>
+  <label class="toggle"><input type="checkbox" id="showTracks" checked> flight tracks</label>
+  <span class="spacer"></span>
+  <span id="status">Loading…</span>
+  <button id="download" title="Download places.geojson">Download</button>
+  <button id="save" class="primary" title="Save to dem/areas/&lt;area&gt;/places.geojson">Save</button>
+</header>
+<div id="banner"></div>
+<div id="map"></div>
+<aside>
+  <div class="list-head"><span id="count"></span><span>seed <span class="dot" style="display:inline-block;background:var(--seed)"></span> confirmed <span class="dot" style="display:inline-block;background:var(--confirmed)"></span></span></div>
+  <div id="list"></div>
+  <div class="help">
+    Click a place to select and edit it — drag its vertices, or drag the shape to move it.
+    Mark a seed <b>confirmed</b> once it's right. Hover a flight track to see which video it is.<br><br>
+    <b>Save</b> writes <code>dem/areas/<span class="areaName"></span>/places.geojson</code>: in Chrome or Edge pick
+    that file the first time, then later saves go straight to it. Other browsers download a copy to move there.
+    Edits are also kept as a draft in this browser until saved.
+  </div>
+</aside>
+
+<script>
+const params = new URLSearchParams(location.search);
+const area = params.get('area') || 'quoin';
+const base = `dem/areas/${area}/`;
+const DRAFT_KEY = `places-draft:${area}`;
+const COLORS = { seed: getCss('--seed'), confirmed: getCss('--confirmed') };
+
+function getCss(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+document.querySelectorAll('.areaName').forEach(el => { el.textContent = area; });
+document.title = `Places — ${area}`;
+
+const map = L.map('map', { zoomControl: true, preferCanvas: false });
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  attribution: '&copy; Esri, Maxar, Earthstar Geographics', maxZoom: 21, maxNativeZoom: 19,
+}).addTo(map);
+map.pm.setGlobalOptions({ snappable: false, allowSelfIntersection: false });
+map.pm.setPathOptions({ color: COLORS.confirmed, weight: 2, fillOpacity: 0.15 });
+
+const paddockLayer = L.layerGroup().addTo(map);
+const trackLayer = L.layerGroup().addTo(map);
+const placeLayer = L.featureGroup().addTo(map);
+
+let places = [];          // { id, layer, props }
+let selectedId = null;
+let nextId = 1;
+let dirty = false;
+let fileHandle = null;
+let savedSnapshot = '';
+
+// ── Loading ──
+
+async function fetchJson(url) {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+  return res.json();
+}
+
+async function loadAreas() {
+  const select = document.getElementById('area');
+  try {
+    const index = await fetchJson('dem/areas/index.json');
+    for (const a of index.areas) select.add(new Option(a.name, a.name, false, a.name === area));
+  } catch {
+    select.add(new Option(area, area, true, true));
+  }
+  select.addEventListener('change', () => {
+    if (dirty && !confirm('You have unsaved changes. Switch area anyway? (They stay in this browser as a draft.)')) {
+      select.value = area; return;
+    }
+    location.search = `?area=${encodeURIComponent(select.value)}`;
+  });
+}
+
+async function loadContext() {
+  try {
+    const paddocks = await fetchJson(base + 'paddocks.geojson');
+    L.geoJSON(paddocks, {
+      interactive: false,
+      style: { color: '#ffffff', weight: 1, opacity: 0.7, fill: false, dashArray: '4 3' },
+      onEachFeature: (f, layer) => {
+        if (!f.properties.name) return;
+        const centre = layer.getBounds().getCenter();
+        L.tooltip({ permanent: true, direction: 'center', className: 'paddock-label', interactive: false })
+          .setLatLng(centre).setContent(f.properties.name).addTo(paddockLayer);
+      },
+    }).addTo(paddockLayer);
+  } catch { document.getElementById('showPaddocks').parentElement.hidden = true; }
+
+  try {
+    const tracks = await fetchJson(base + 'tracks.geojson');
+    L.geoJSON(tracks, {
+      style: { color: '#ff4fd8', weight: 1.5, opacity: 0.55 },
+      onEachFeature: (f, layer) => {
+        const p = f.properties;
+        const when = p.start ? p.start.replace('T', ' ') : 'unknown time';
+        layer.bindTooltip(`<b>${escapeHtml(p.video)}</b><br>${when} · ${p.duration_min} min<br><small>${escapeHtml(p.path || '')}</small>`, { sticky: true });
+        layer.on('mouseover', () => layer.setStyle({ weight: 4, opacity: 1 }));
+        layer.on('mouseout', () => layer.setStyle({ weight: 1.5, opacity: 0.55 }));
+      },
+    }).addTo(trackLayer);
+  } catch { document.getElementById('showTracks').parentElement.hidden = true; }
+}
+
+async function loadPlaces() {
+  let data = { type: 'FeatureCollection', features: [] };
+  let found = true;
+  try { data = await fetchJson(base + 'places.geojson'); } catch { found = false; }
+  setPlaces(data);
+  savedSnapshot = serialise();
+  setDirty(false);
+
+  const draft = readDraft();
+  if (draft && JSON.stringify(draft.data) !== savedSnapshot) {
+    showBanner(`Unsaved edits from ${new Date(draft.savedAt).toLocaleString()} are stored in this browser.`,
+      [['Restore', () => { setPlaces(draft.data); setDirty(true); hideBanner(); }],
+       ['Discard', () => { clearDraft(); hideBanner(); }]]);
+  }
+  status(found ? `Loaded ${places.length} place(s)` : `No places.geojson for ${area} yet — add some`);
+}
+
+// ── Places model ──
+
+function setPlaces(collection) {
+  placeLayer.clearLayers();
+  places = [];
+  selectedId = null;
+  for (const f of collection.features || []) addPlace(featureToLayer(f), { ...f.properties });
+  renderList();
+  fitAll();
+}
+
+function featureToLayer(f) {
+  const p = f.properties || {};
+  if (p.shape === 'circle' && p.center && p.radius_m) {
+    return L.circle([p.center[1], p.center[0]], { radius: p.radius_m });
+  }
+  const g = f.geometry;
+  if (g.type === 'Polygon') return L.polygon(L.GeoJSON.coordsToLatLngs(g.coordinates, 1));
+  if (g.type === 'MultiPolygon') return L.polygon(L.GeoJSON.coordsToLatLngs(g.coordinates, 2));
+  if (g.type === 'Point') return L.circle([g.coordinates[1], g.coordinates[0]], { radius: p.radius_m || 100 });
+  throw new Error(`Unsupported geometry ${g.type}`);
+}
+
+function addPlace(layer, props) {
+  const place = { id: nextId++, layer, props: { name: 'New place', status: 'confirmed', notes: '', ...props } };
+  places.push(place);
+  styleLayer(place);
+  layer.addTo(placeLayer);
+  layer.bindTooltip(() => escapeHtml(place.props.name), { className: 'place-label', direction: 'center', permanent: false });
+  layer.on('click', e => { L.DomEvent.stopPropagation(e); select(place.id); });
+  layer.on('pm:edit pm:dragend', () => { markChanged(); renderMeta(place); });
+  return place;
+}
+
+function styleLayer(place) {
+  const colour = COLORS[place.props.status] || COLORS.confirmed;
+  const selected = place.id === selectedId;
+  place.layer.setStyle({
+    color: selected ? '#ffffff' : colour, fillColor: colour,
+    weight: selected ? 3 : 2, fillOpacity: selected ? 0.25 : 0.12,
+    dashArray: place.props.status === 'seed' ? '6 4' : null,
+  });
+}
+
+function select(id, { pan = false } = {}) {
+  const prev = places.find(p => p.id === selectedId);
+  if (prev) prev.layer.pm.disable();
+  selectedId = id;
+  const place = places.find(p => p.id === id);
+  if (place) {
+    // One call for both: enableLayerDrag() after enable() switches vertex editing back off.
+    place.layer.pm.enable({ draggable: true });
+    place.layer.bringToFront();
+    if (pan) map.fitBounds(place.layer.getBounds(), { maxZoom: 17, padding: [40, 40] });
+  }
+  places.forEach(styleLayer);
+  renderList();
+  const el = document.querySelector(`.place[data-id="${id}"]`);
+  if (el) el.scrollIntoView({ block: 'nearest' });
+}
+
+function removePlace(id) {
+  const place = places.find(p => p.id === id);
+  if (!place || !confirm(`Delete "${place.props.name}"?`)) return;
+  place.layer.pm.disable();
+  placeLayer.removeLayer(place.layer);
+  places = places.filter(p => p.id !== id);
+  if (selectedId === id) selectedId = null;
+  renderList();
+  markChanged();
+}
+
+function fitAll() {
+  const layers = [placeLayer, trackLayer].map(g => g.getLayers().length ? L.featureGroup(g.getLayers()) : null).filter(Boolean);
+  const bounds = layers.reduce((b, g) => b ? b.extend(g.getBounds()) : g.getBounds(), null);
+  if (bounds && bounds.isValid()) map.fitBounds(bounds, { padding: [30, 30] });
+  else map.setView([-42.14, 147.65], 13);
+}
+
+// ── Sidebar ──
+
+function renderList() {
+  const list = document.getElementById('list');
+  list.textContent = '';
+  const sorted = [...places].sort((a, b) => a.props.name.localeCompare(b.props.name));
+  renderCount();
+
+  for (const place of sorted) {
+    const el = document.createElement('div');
+    el.className = 'place' + (place.id === selectedId ? ' selected' : '');
+    el.dataset.id = place.id;
+    el.innerHTML = `
+      <div class="row">
+        <span class="dot" style="background:${COLORS[place.props.status] || COLORS.confirmed}"></span>
+        <input class="name" value="${escapeAttr(place.props.name)}" aria-label="Place name">
+      </div>
+      <div class="meta"></div>
+      <div class="detail">
+        <div class="row">
+          <select class="status" aria-label="Status">
+            <option value="seed">seed — needs checking</option>
+            <option value="confirmed">confirmed</option>
+          </select>
+        </div>
+        <textarea class="notes" placeholder="Notes">${escapeHtml(place.props.notes || '')}</textarea>
+        <div class="actions">
+          <button class="zoom">Zoom to</button>
+          <button class="delete">Delete</button>
+        </div>
+      </div>`;
+    el.querySelector('.status').value = place.props.status || 'confirmed';
+    el.addEventListener('click', e => { if (place.id !== selectedId) select(place.id, { pan: true }); });
+    el.querySelector('.name').addEventListener('input', e => {
+      place.props.name = e.target.value; markChanged(); place.layer.setTooltipContent(escapeHtml(place.props.name));
+    });
+    el.querySelector('.name').addEventListener('focus', () => { if (place.id !== selectedId) select(place.id, { pan: true }); });
+    el.querySelector('.status').addEventListener('change', e => {
+      place.props.status = e.target.value; markChanged(); styleLayer(place);
+      el.querySelector('.dot').style.background = COLORS[place.props.status];
+      renderCount();
+    });
+    el.querySelector('.notes').addEventListener('input', e => { place.props.notes = e.target.value; markChanged(); });
+    el.querySelector('.zoom').addEventListener('click', e => { e.stopPropagation(); select(place.id, { pan: true }); });
+    el.querySelector('.delete').addEventListener('click', e => { e.stopPropagation(); removePlace(place.id); });
+    list.appendChild(el);
+    renderMeta(place, el);
+  }
+}
+
+function renderCount() {
+  const seeds = places.filter(p => p.props.status === 'seed').length;
+  document.getElementById('count').textContent =
+    `${places.length} place${places.length === 1 ? '' : 's'}${seeds ? `, ${seeds} still seed${seeds === 1 ? '' : 's'}` : ''}`;
+}
+
+function renderMeta(place, el = document.querySelector(`.place[data-id="${place.id}"]`)) {
+  if (!el) return;
+  const ha = areaHa(place.layer);
+  const shape = place.layer instanceof L.Circle ? `circle r ${Math.round(place.layer.getRadius())} m` : 'polygon';
+  const source = place.props.source ? ` · ${place.props.source}` : '';
+  el.querySelector('.meta').textContent = `${shape} · ${ha < 10 ? ha.toFixed(1) : Math.round(ha)} ha${source}`;
+}
+
+// ── Drawing ──
+
+document.getElementById('addPolygon').addEventListener('click', () => toggleDraw('Polygon'));
+document.getElementById('addCircle').addEventListener('click', () => toggleDraw('Circle'));
+
+function toggleDraw(shape) {
+  const active = map.pm.globalDrawModeEnabled() && map.pm.Draw.getActiveShape() === shape;
+  map.pm.disableDraw();
+  if (!active) map.pm.enableDraw(shape, { snappable: false, finishOn: shape === 'Polygon' ? 'snap' : null });
+  updateDrawButtons();
+}
+
+function updateDrawButtons() {
+  const shape = map.pm.globalDrawModeEnabled() ? map.pm.Draw.getActiveShape() : null;
+  document.getElementById('addPolygon').classList.toggle('active', shape === 'Polygon');
+  document.getElementById('addCircle').classList.toggle('active', shape === 'Circle');
+}
+
+map.on('pm:drawstart pm:drawend', updateDrawButtons);
+map.on('pm:create', e => {
+  const layer = e.layer;
+  map.removeLayer(layer);            // re-added to placeLayer by addPlace
+  const place = addPlace(layer, { name: 'New place', status: 'confirmed', source: 'drawn by hand' });
+  markChanged();
+  select(place.id);
+  const input = document.querySelector(`.place[data-id="${place.id}"] .name`);
+  if (input) { input.focus(); input.select(); }
+});
+map.on('click', () => { if (!map.pm.globalDrawModeEnabled() && selectedId !== null) select(null); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { map.pm.disableDraw(); updateDrawButtons(); if (!e.target.matches('input, textarea')) select(null); }
+  if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save(); }
+});
+
+// ── Toggles ──
+
+document.getElementById('showPaddocks').addEventListener('change', e => {
+  e.target.checked ? paddockLayer.addTo(map) : map.removeLayer(paddockLayer);
+});
+document.getElementById('showTracks').addEventListener('change', e => {
+  e.target.checked ? trackLayer.addTo(map) : map.removeLayer(trackLayer);
+});
+map.on('zoomend', () => map.getContainer().classList.toggle('hide-paddock-labels', map.getZoom() < 14));
+
+// ── Serialising and saving ──
+
+function toFeature(place) {
+  const props = { ...place.props };
+  let geometry;
+  if (place.layer instanceof L.Circle) {
+    const c = place.layer.getLatLng();
+    props.shape = 'circle';
+    props.center = [round(c.lng), round(c.lat)];
+    props.radius_m = Math.round(place.layer.getRadius());
+    geometry = circlePolygon(c, place.layer.getRadius());
+  } else {
+    delete props.shape; delete props.center; delete props.radius_m;
+    geometry = place.layer.toGeoJSON(7).geometry;
+  }
+  return { type: 'Feature', properties: props, geometry };
+}
+
+function serialise() {
+  const features = [...places].sort((a, b) => a.props.name.localeCompare(b.props.name)).map(toFeature);
+  return JSON.stringify({ type: 'FeatureCollection', features }, null, 1);
+}
+
+function circlePolygon(centre, radius, steps = 64) {
+  const mPerDegLat = 111320, mPerDegLon = 111320 * Math.cos(centre.lat * Math.PI / 180);
+  const ring = [];
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * 2 * Math.PI;
+    ring.push([round(centre.lng + Math.sin(a) * radius / mPerDegLon), round(centre.lat + Math.cos(a) * radius / mPerDegLat)]);
+  }
+  return { type: 'Polygon', coordinates: [ring] };
+}
+
+async function save() {
+  const text = serialise();
+  if (!window.showSaveFilePicker) { download(text); return; }
+  try {
+    if (!fileHandle) {
+      fileHandle = await window.showSaveFilePicker({
+        suggestedName: 'places.geojson',
+        types: [{ description: 'GeoJSON', accept: { 'application/geo+json': ['.geojson'] } }],
+      });
+    }
+    const writable = await fileHandle.createWritable();
+    await writable.write(text);
+    await writable.close();
+    savedSnapshot = text;
+    clearDraft();
+    setDirty(false);
+    status(`Saved ${places.length} place(s) to ${fileHandle.name} at ${new Date().toLocaleTimeString()}`);
+  } catch (err) {
+    if (err.name !== 'AbortError') { status(`Save failed: ${err.message}`); console.error(err); }
+  }
+}
+
+function download(text = serialise()) {
+  const blob = new Blob([text], { type: 'application/geo+json' });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'places.geojson' });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  status(`Downloaded — move it to dem/areas/${area}/places.geojson`);
+}
+
+document.getElementById('save').addEventListener('click', save);
+document.getElementById('download').addEventListener('click', () => download());
+
+function markChanged() {
+  const text = serialise();
+  setDirty(text !== savedSnapshot);
+  try {
+    if (text !== savedSnapshot) localStorage.setItem(DRAFT_KEY, JSON.stringify({ savedAt: Date.now(), data: JSON.parse(text) }));
+    else localStorage.removeItem(DRAFT_KEY);
+  } catch { /* storage unavailable: the draft is a convenience only */ }
+}
+
+function setDirty(value) {
+  dirty = value;
+  const btn = document.getElementById('save');
+  btn.classList.toggle('dirty', dirty);
+  btn.textContent = dirty ? 'Save •' : 'Save';
+}
+
+function readDraft() {
+  try { return JSON.parse(localStorage.getItem(DRAFT_KEY)); } catch { return null; }
+}
+function clearDraft() { try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } }
+
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+// ── Helpers ──
+
+function areaHa(layer) {
+  if (layer instanceof L.Circle) return Math.PI * layer.getRadius() ** 2 / 1e4;
+  const rings = layer.getLatLngs();
+  const polys = Array.isArray(rings[0][0]) ? rings : [rings];   // Multi vs single polygon
+  let total = 0;
+  for (const poly of polys) poly.forEach((ring, i) => { total += (i === 0 ? 1 : -1) * Math.abs(ringArea(ring)); });
+  return total / 1e4;
+}
+
+function ringArea(ring) {
+  if (ring.length < 3) return 0;
+  const lat0 = ring[0].lat * Math.PI / 180;
+  const mx = 111320 * Math.cos(lat0), my = 111320;
+  let sum = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    sum += (ring[j].lng * mx) * (ring[i].lat * my) - (ring[i].lng * mx) * (ring[j].lat * my);
+  }
+  return sum / 2;
+}
+
+function round(v) { return Math.round(v * 1e7) / 1e7; }
+function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function escapeAttr(s) { return escapeHtml(s); }
+function status(text) { document.getElementById('status').textContent = text; }
+
+function showBanner(text, buttons) {
+  const banner = document.getElementById('banner');
+  banner.textContent = text;
+  for (const [label, fn] of buttons) {
+    const b = document.createElement('button');
+    b.textContent = label; b.addEventListener('click', fn);
+    banner.appendChild(b);
+  }
+  banner.style.display = 'block';
+}
+function hideBanner() { document.getElementById('banner').style.display = 'none'; }
+
+(async () => {
+  await loadAreas();
+  await loadContext();
+  await loadPlaces();
+  map.getContainer().classList.toggle('hide-paddock-labels', map.getZoom() < 14);
+})();
+</script>
+</body>
+</html>
