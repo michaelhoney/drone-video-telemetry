@@ -333,11 +333,32 @@ Cells above a level's threshold are polygonised at the heatmap's 10 m grid, then
 
 Dates come from the telemetry's own timestamps, not the filename; a mismatch between the two is reported as it exports. Features are written newest flight first, and widest level first within a flight so the closer levels draw on top. Flights overlap each other as well, so categorise on `year` or `date` to show when each patch was last flown.
 
+### 6. Places — named areas of ground
+
+A place is a named area of ground — a dam, a cliff line, a monitoring site — kept per area in `dem/areas/<area>/places.geojson`. Places are the vocabulary for describing where drone footage is of.
+
+**Seed them from the drone archive.** Pilots already name missions on the controller (`DJI_202510271228_006_Quoin_cliffs`), so `seed_places.py` turns every named flight folder in the archive into a seed polygon:
+
+```bash
+python3 dem/seed_places.py quoin --media "/path/to/Dropbox/.../quoin/drones/drone" \
+    --paddocks "/path/to/.../quoin_paddocks.gpkg"
+```
+
+- **Photo missions** are outlined from where the photos were aimed — each DJI photo records its laser rangefinder target (`LRFTargetLat`/`LRFTargetLon`) — so these are usually close already.
+- **Video-only missions** get the ground the camera saw from within 50 m, from the flight's visibility heatmap: a rough area around the subject rather than its outline.
+
+Mission names map to place names through an optional `dem/areas/<area>/place-names.json` (regular expressions → names, plus names to ignore); unmatched mission names become places of their own, and DJI's generic route names and test flights are skipped. Re-running only adds seeds whose name and source folders aren't in `places.geojson` already, so places you've renamed or redrawn are kept; `--replace` starts over.
+
+Telemetry and heatmaps for archive videos are cached in `dem/areas/<area>/sources/`, keyed by the video's own filename.
+
+**Check and edit them in `places.html`.** Serve the project root and open `http://localhost:5002/places.html?area=quoin`: satellite imagery with paddocks, every flight track (hover for the video), and the places. Select a place to drag its vertices or move it, rename it, add notes, and mark seeds *confirmed*; draw new ones with **+ Polygon** or **+ Circle**. **Save** writes `places.geojson` — in Chrome or Edge pick that file once and later saves go straight to it; other browsers download a copy. Unsaved edits are kept in the browser until you save.
+
 ### File layout after preprocessing
 
 ```
 drone_video_telemetry/
   index.html                        # The viewer
+  places.html                       # Places editor
   mp4/
     matrice-4E-mp4/
       marathon/*.MP4                # Folder name = area name
@@ -348,6 +369,8 @@ drone_video_telemetry/
     preprocess_dem.py               # Clip area-dem.tif to flight-dem
     compute_visibility.py
     export_coverage.py              # Per-flight coverage polygons for QGIS
+    seed_places.py                  # Seed places.geojson from named missions in the drone archive
+    media_sources.py                # Archive videos: telemetry/heatmap cache, tracks
     PLAN.md                         # Original design notes
     exports/
       <area>_drone_video_coverage_<date>.gpkg      # Coverage polygons for QGIS
@@ -363,6 +386,11 @@ drone_video_telemetry/
           <basename>-telemetry.json # Extracted from MP4, or Exported from viewer
         visibility/
           <basename>.bin / .json    # Per-flight visibility heatmap
+        places.geojson              # Named places (edit in places.html)
+        place-names.json            # Mission name -> place name mapping for seeding
+        paddocks.geojson            # Context layer for places.html
+        tracks.geojson              # Flight tracks for places.html
+        sources/                    # Telemetry + heatmaps of archive videos, by source filename
 ```
 
 ## Browser compatibility
@@ -386,6 +414,9 @@ Works on macOS, Windows, and Linux. Tested in Chrome and Safari; should work in 
 | `dem/compute_visibility.py` | Ray-cast visibility heatmap from telemetry + DEM |
 | `dem/process_flights.py` | Batch-process every area MP4 under `mp4/` through telemetry + visibility (needs ffmpeg) |
 | `dem/export_coverage.py` | Export per-flight coverage polygons as a GIS layer for QGIS |
+| `dem/seed_places.py` | Seed an area's places from named missions in the drone archive |
+| `dem/media_sources.py` | Shared helpers for archive videos: telemetry and heatmap cache, flight tracks |
+| `places.html` | Map editor for an area's places |
 | `dem/PLAN.md` | Original design notes for the DEM features |
 | `dem/camera-calibration.json` | Camera pitch / heading / FOV corrections saved from the viewer's calibration panel (optional) |
 | `dem/areas/index.json` | Area names and DEM bounds for the viewer (generated) |
