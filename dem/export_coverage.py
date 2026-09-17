@@ -18,12 +18,12 @@ Usage:
     python3 dem/export_coverage.py --area marathon
     python3 dem/export_coverage.py                              # every area with heatmaps
     python3 dem/export_coverage.py --area marathon --levels 300 # one feature per video
-    python3 dem/export_coverage.py --area marathon --output ~/Desktop/marathon.gpkg
+    python3 dem/export_coverage.py --area marathon --output ~/Desktop/marathon.geojson
 
-Output (EPSG:4326) defaults to dem/exports/<area>_drone_video_coverage_<today>.geojson,
-datestamped so a copy sent to someone says when it was made. Any extension OGR knows
-works — .gpkg is the friendlier QGIS format; .geojson is written directly with tidied
-coordinate precision.
+Output (EPSG:4326) defaults to dem/exports/<area>_drone_video_coverage_<today>.gpkg,
+datestamped so a copy sent to someone says when it was made. GeoPackage comes out about
+half the size of GeoJSON and keeps the date fields typed. Any extension OGR knows works —
+.geojson is written directly with tidied coordinate precision.
 """
 
 import argparse
@@ -250,7 +250,7 @@ def main():
     parser.add_argument("--output", type=Path,
                         help=f"Output path; extension picks the format "
                              f"(default: {rel(EXPORTS_DIR)}/"
-                             f"<area>_drone_video_coverage_<today>.geojson)")
+                             f"<area>_drone_video_coverage_<today>.gpkg)")
     parser.add_argument("--levels", type=parse_levels, default=LEVELS,
                         help="Comma-separated viewing distances in metres; each video gets one "
                              "nested polygon per level (default "
@@ -272,7 +272,7 @@ def main():
         sys.exit("No areas have visibility heatmaps yet — run: python3 dem/process_flights.py")
 
     out_path = args.output or EXPORTS_DIR / (f"{args.area or 'all-areas'}_drone_video_coverage"
-                                             f"_{date.today().isoformat()}.geojson")
+                                             f"_{date.today().isoformat()}.gpkg")
     print(f"{len(args.levels)} level(s): ground seen for {args.min_seconds:g}s or more from "
           f"within " + ", ".join(f"{v:g} m" for v in args.levels))
 

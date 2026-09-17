@@ -301,12 +301,12 @@ Processing is numpy-vectorised with a coarse-to-fine ray march; a typical 7-minu
 `export_coverage.py` turns the per-flight heatmaps into a vector layer. Each video becomes a **nested stack of polygons, one per viewing-distance level**, carrying the flight's date, time and stats as attributes. Load it in QGIS beside your other layers to show colleagues where we have drone vision, from when, and how good a look we got.
 
 ```bash
-python3 dem/export_coverage.py --area marathon   # -> dem/exports/marathon_drone_video_coverage_<today>.geojson
+python3 dem/export_coverage.py --area marathon   # -> dem/exports/marathon_drone_video_coverage_<today>.gpkg
 python3 dem/export_coverage.py                   # every area with heatmaps
-python3 dem/export_coverage.py --area marathon --output ~/Desktop/marathon.gpkg
+python3 dem/export_coverage.py --area marathon --output ~/Desktop/marathon.geojson
 ```
 
-Output is EPSG:4326 MultiPolygon, datestamped with the day it was made so a copy sent to someone says how current it is. The extension picks the format — `.geojson` is written directly with tidied coordinate precision; anything else OGR knows (`.gpkg`, `.shp`) goes through geopandas.
+Output is EPSG:4326 MultiPolygon, datestamped with the day it was made so a copy sent to someone says how current it is. GeoPackage is the default: it comes out about half the size of GeoJSON and keeps `date` and `flight_start` as real date types. `--output` with another extension picks another format — `.geojson` is written directly with tidied coordinate precision; anything else OGR knows (`.shp`, `.fgb`) goes through geopandas.
 
 **Levels —** heatmap scores accumulate `1/d²` per sampled second, so a cell seen for S seconds from d metres scores `S/d²`. That makes each level readable as *"seen for at least `--min-seconds` from within `<level>` metres"*. Shorter distance means better ground detail, so the levels nest — the closest is the smallest and sits inside all the others. The default halves at each step, which puts a clean 4× jump in threshold between bands:
 
@@ -350,7 +350,7 @@ drone_video_telemetry/
     export_coverage.py              # Per-flight coverage polygons for QGIS
     PLAN.md                         # Original design notes
     exports/
-      <area>_drone_video_coverage_<date>.geojson   # Coverage polygons for QGIS
+      <area>_drone_video_coverage_<date>.gpkg      # Coverage polygons for QGIS
     areas/
       index.json                    # Area names + DEM bounds (read by the viewer)
       marathon/
@@ -394,4 +394,4 @@ Works on macOS, Windows, and Linux. Tested in Chrome and Safari; should work in 
 | `dem/areas/<area>/flight-dem.{bin,json}` | Shared clipped DEM for the area (generated) |
 | `dem/areas/<area>/telemetry/<basename>-telemetry.json` | Per-flight telemetry (extracted, or exported from viewer) |
 | `dem/areas/<area>/visibility/<basename>.{bin,json}` | Per-flight visibility heatmap (generated) |
-| `dem/exports/<area>_drone_video_coverage_<date>.geojson` | Per-flight coverage polygons for QGIS (generated) |
+| `dem/exports/<area>_drone_video_coverage_<date>.gpkg` | Per-flight coverage polygons for QGIS (generated) |
