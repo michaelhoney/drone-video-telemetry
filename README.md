@@ -353,6 +353,38 @@ Telemetry and heatmaps for archive videos are cached in `dem/areas/<area>/source
 
 **Check and edit them in `places.html`.** Serve the project root and open `http://localhost:5002/places.html?area=quoin`: satellite imagery with paddocks, every flight track (hover for the video), and the places. Select a place to drag its vertices or move it, rename it, add notes, and mark seeds *confirmed*; draw new ones with **+ Polygon** or **+ Circle**. **Save** writes `places.geojson` — in Chrome or Edge pick that file once and later saves go straight to it; other browsers download a copy. Unsaved edits are kept in the browser until you save.
 
+### 7. Link archive videos under descriptive names
+
+Rather than copying videos out of the drone archive, `link_videos.py` gives each one a symlink in the area's mp4 folder, named for when it was flown and what it shows:
+
+```
+mp4/matrice-4E-mp4/quoin/2025-10-27-1229-quoin-cliffs.MP4
+    -> <archive>/2025-10-27-Quoin/DJI_202510271228_006_Quoin_cliffs/DJI_20251027122931_0001_V.MP4
+```
+
+```bash
+python3 dem/link_videos.py quoin --media "/path/to/Dropbox/.../drone"           # dry run: writes the plan
+python3 dem/link_videos.py quoin --media "/path/to/Dropbox/.../drone" --apply   # make the links
+python3 dem/process_flights.py --area quoin && python3 dem/export_coverage.py --area quoin
+```
+
+Names are `YYYY-MM-DD-HHMM-<label>`, the time distinguishing several flights on one day. The label is, in order of preference:
+
+| Basis | Label |
+|---|---|
+| hand | the name a person already gave the file (a renamed archive file, or a local copy being replaced), minus its date |
+| mission | the mission name the pilot gave the DJI flight folder, mapped through `place-names.json` like seeding does — generic route names don't count |
+| place | the place(s) holding at least 20% of the flight's visibility score, i.e. where the camera looked closest and longest |
+| paddock | the paddock(s) making up at least 25% of the ground seen from within 200 m |
+
+The dry run writes `dem/areas/<area>/video-links.csv`; edit its `name` column to override any name, and those names are kept on later runs (`--rename` proposes fresh ones for every video). `--apply` then:
+
+- creates or renames the links;
+- gives each video its telemetry and heatmap under the new name, from the `sources/` cache or by renaming what a local copy already had, so `process_flights.py` finds everything current;
+- moves any real file in the mp4 folder that is **byte-identical** to its archive original to the Trash.
+
+Links only resolve while the archive drive is mounted. `process_flights.py` skips unresolvable links, and telemetry and heatmaps already made keep working without the drive. Exports record each video's archive path in their `mp4` attribute.
+
 ### File layout after preprocessing
 
 ```
@@ -370,6 +402,7 @@ drone_video_telemetry/
     compute_visibility.py
     export_coverage.py              # Per-flight coverage polygons for QGIS
     seed_places.py                  # Seed places.geojson from named missions in the drone archive
+    link_videos.py                  # Symlink archive videos into mp4/ under descriptive names
     media_sources.py                # Archive videos: telemetry/heatmap cache, tracks
     PLAN.md                         # Original design notes
     exports/
@@ -391,6 +424,7 @@ drone_video_telemetry/
         paddocks.geojson            # Context layer for places.html
         tracks.geojson              # Flight tracks for places.html
         sources/                    # Telemetry + heatmaps of archive videos, by source filename
+        video-links.csv             # Archive video -> link name plan (editable)
 ```
 
 ## Browser compatibility
@@ -415,6 +449,7 @@ Works on macOS, Windows, and Linux. Tested in Chrome and Safari; should work in 
 | `dem/process_flights.py` | Batch-process every area MP4 under `mp4/` through telemetry + visibility (needs ffmpeg) |
 | `dem/export_coverage.py` | Export per-flight coverage polygons as a GIS layer for QGIS |
 | `dem/seed_places.py` | Seed an area's places from named missions in the drone archive |
+| `dem/link_videos.py` | Symlink an area's archive videos into `mp4/` under descriptive names |
 | `dem/media_sources.py` | Shared helpers for archive videos: telemetry and heatmap cache, flight tracks |
 | `places.html` | Map editor for an area's places |
 | `dem/PLAN.md` | Original design notes for the DEM features |

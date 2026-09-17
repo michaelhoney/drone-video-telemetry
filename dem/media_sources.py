@@ -110,6 +110,16 @@ def write_geojson(path, features, ndigits=7):
 
 def load_polygons(path, name_fields=("name",)):
     """[(name, shapely geometry in EPSG:4326, properties)] from a vector file, skipping unnamed features."""
+    if Path(path).suffix.lower() in (".geojson", ".json"):
+        # Read directly: OGR drops list-valued properties (a place's source folders) with warnings.
+        from shapely.geometry import shape
+        out = []
+        for f in json.loads(Path(path).read_text())["features"]:
+            props = f.get("properties") or {}
+            name = next((props[k] for k in name_fields if isinstance(props.get(k), str) and props[k].strip()), None)
+            if name and f.get("geometry"):
+                out.append((name.strip(), shape(f["geometry"]), props))
+        return out
     import geopandas as gpd
     gdf = gpd.read_file(path)
     if gdf.crs and gdf.crs.to_epsg() != 4326:
