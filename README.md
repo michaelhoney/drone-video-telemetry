@@ -6,6 +6,62 @@ An HTML application that plays DJI drone video alongside a live satellite map, s
 
 Built for DJI drones including the **Matrice 4E**, **Matrice 300 + Zenmuse**, and **Mavic 3 Thermal (M3T)**. Supports three telemetry pathways: embedded `mov_text` subtitle tracks, binary `djmd` protobuf tracks, and companion `.SRT` sidecar files.
 
+## About this project
+
+Every DJI drone video carries a second stream alongside the picture: a frame-by-frame record of where the aircraft was, how high it was, which way the camera was pointing and how the camera was set. Usually nobody reads it. This project reads it and turns a folder of drone videos into something you can map, search and measure, as well as watch.
+
+The key idea is simple. If you know where the camera was and where it was pointing at each moment, you know which patch of ground is in every frame. A lot follows from that.
+
+### What's in the telemetry
+
+For every frame of video (about 30 a second):
+
+- **Time**: date and time, to the millisecond
+- **Position**: latitude and longitude
+- **Height**: above the takeoff point, and above sea level
+- **Camera direction**: the gimbal's compass heading and its tilt below the horizon
+- **Camera settings**: focal length and zoom, ISO, shutter speed and aperture
+
+This works for the Matrice 4E, the Matrice 300 with a Zenmuse camera and the Mavic 3 Thermal, whether the drone embeds the record in the video file or writes it to a separate `.SRT` file.
+
+### What we get from it
+
+**Where the drone was, in step with what it saw.** The video plays beside a satellite map, and the aircraft's position, track, heading, camera tilt, speed and height follow the picture frame by frame. You can answer "where is this?" for any moment, and skim a long flight by moving around the map instead of scrubbing the timeline.
+
+**What ground is in the frame.** The camera's view is projected onto the map as a footprint. It starts as a quick flat-ground estimate, and becomes accurate when a terrain model is available (1 m LiDAR where we have it), so hillsides, gullies and cliffs come out right. That matters for oblique footage: with the horizon in shot, the footprint can reach kilometres.
+
+**How well each piece of ground was seen.** Over a whole flight, every patch of ground builds up a score from how long it was in view and how close the camera was. The result is a heatmap for each flight that tells ground watched up close for a long time apart from ground glimpsed in the distance.
+
+**Coverage as a map layer.** Each flight becomes a set of nested outlines, one for each viewing distance:
+
+| Seen from within | Good for |
+|---|---|
+| 25 m | Near straight down, right under the flight line |
+| 50 m | Picking out individual plants |
+| 100 m | Good working detail |
+| 200 m | Recognisable structure such as tracks, canopy gaps and erosion |
+| 400 m | Distant, oblique context |
+
+Each outline is tagged with the flight's date, time, duration, height and source video. In QGIS alongside property layers, this answers questions like: where do we have drone footage? How recent is it? How close did we get? Which parts of the property have never been filmed, or not for years?
+
+**What the footage is of.** *Places* are named areas of ground, such as a dam, a cliff line or a monitoring site. They're seeded automatically from the mission names pilots already type on the controller and from where survey photos were aimed, then refined by hand on a map. A video can then be described by the places it looked at most closely, so a file like `DJI_20251027122931_0001_V.MP4` becomes `2025-10-27-1229-quoin-cliffs.MP4`.
+
+### How much to trust it
+
+- The telemetry lines up with the picture to within about 20 ms.
+- The camera model can be checked against reality. Pick features in the video that you can also find on the map, see where the model puts them, and correct small tilt or heading offsets.
+- The drone's barometric altitude is often several metres out. It's corrected at takeoff against the terrain model, which stops footprints being drawn too far away.
+
+### Where this could go
+
+Knowing what ground every frame shows opens up more than we've built so far:
+
+- **Finding footage by place instead of by file.** "Every clip that looked at the north dam from within 100 m, since 2024."
+- **Repeat monitoring.** Line up footage of the same site across seasons and years, and see where coverage is thin or out of date before planning the next flight.
+- **Locating observations.** The same maths that checks the camera turns a point clicked in the video into a map coordinate, so a weed patch, erosion head or animal spotted in footage could be dropped straight onto the map.
+- **Measuring survey effort.** The hectares actually seen at useful detail per flight, per year or per site. For thermal animal surveys, that's the area that was searched.
+- **Planning flights.** Use the coverage layers to plan flights that fill the gaps, not repeat what's already well covered.
+
 ## Quick start — viewer only
 
 1. Open `index.html` in a modern browser (Chrome, Firefox, Safari, Edge) on any OS.
