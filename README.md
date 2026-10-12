@@ -415,7 +415,7 @@ Mission names map to place names through an optional `dem/areas/<area>/place-nam
 
 Telemetry and heatmaps for archive videos are cached in `dem/areas/<area>/sources/`, keyed by the video's own filename.
 
-**Check and edit them in `places.html`.** Serve the project root and open `http://localhost:5002/places.html?area=quoin`: satellite imagery with paddocks, every flight track (hover for the video), and the places. Select a place to drag its vertices or move it, rename it, add notes, and mark seeds *confirmed*; draw new ones with **+ Polygon** or **+ Circle**. **Save** writes `places.geojson` — in Chrome or Edge pick that file once and later saves go straight to it; other browsers download a copy. Unsaved edits are kept in the browser until you save.
+**Check and edit them in `places.html`.** Serve the project root and open `http://localhost:5002/places.html?area=quoin`: satellite imagery with paddocks, every flight track (hover for the video), and the places. Select a place to drag its vertices or move it, rename it, add notes, and mark seeds *confirmed*; draw new ones with **+ Polygon** or **+ Circle**. **Save** writes `places.geojson` straight to disk when the page is served by `dem/flights_server.py` (keeping the previous version as `places.geojson.bak`); under another server, Chrome or Edge ask you to pick the file once, and other browsers download a copy. Unsaved edits are kept in the browser until you save.
 
 ### 7. Link archive videos under descriptive names
 

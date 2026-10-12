@@ -6,7 +6,8 @@ pipeline (telemetry, heatmap) and lets you queue process_flights.py runs for
 chosen videos. Runs one job at a time; the log streams back to the page.
 
 Replaces `python3 -m http.server` — index.html and places.html are served as
-before, so one server does everything.
+before, so one server does everything. It also lets places.html save
+dem/areas/<area>/places.geojson in any browser (PUT /api/places/<area>).
 
 Usage:
     python3 dem/flights_server.py            # http://localhost:5002/flights.html
@@ -17,6 +18,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -26,7 +28,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from area_dem import DEM_DIR, INDEX_PATH, MP4_DIR, ROOT, area_dir, area_for_mp4, load_track_points, rel, telemetry_path
+from area_dem import AREAS_DIR, DEM_DIR, INDEX_PATH, MP4_DIR, ROOT, area_dir, area_for_mp4, load_track_points, rel, telemetry_path
 from process_flights import load_calibration, visibility_is_current
 
 PROCESS_FLIGHTS = DEM_DIR / "process_flights.py"
@@ -207,6 +209,13 @@ class Handler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass  # the browser dropped a video request after seeking
 
+    def end_headers(self):
+        # Make browsers revalidate pages (Safari otherwise keeps serving stale
+        # copies of edited HTML); unchanged files still come back as 304s.
+        if not self.path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
     def log_message(self, fmt, *args):
         if not self.path.startswith("/api/"):
             super().log_message(fmt, *args)
@@ -229,6 +238,26 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/api/jobs":
             return self._json(self.jobs.snapshot())
         return super().do_GET()
+
+    def do_PUT(self):
+        area = re.fullmatch(r"/api/places/([\w-]+)", self.path)
+        if not area or not area_dir(area.group(1)).is_dir() or area_dir(area.group(1)).parent != AREAS_DIR:
+            return self._json({"error": "unknown area"}, 404)
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            return self._json({"error": "bad JSON"}, 400)
+        if not isinstance(data, dict) or data.get("type") != "FeatureCollection" or not isinstance(data.get("features"), list):
+            return self._json({"error": "expected a GeoJSON FeatureCollection"}, 400)
+        path = area_dir(area.group(1)) / "places.geojson"
+        # Write via a temp file so a failed save can't truncate it, keeping the previous version.
+        tmp = path.with_suffix(".geojson.tmp")
+        tmp.write_bytes(body)
+        if path.exists():
+            shutil.copy2(path, path.with_suffix(".geojson.bak"))
+        tmp.replace(path)
+        return self._json({"saved": str(rel(path)), "features": len(data["features"])})
 
     def do_POST(self):
         if self.path not in ("/api/process", "/api/cancel"):
