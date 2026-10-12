@@ -71,7 +71,7 @@ Knowing what ground every frame shows opens up more than we've built so far:
    - **SRT only** — telemetry and map without video (useful for drones like the M3T whose MP4s have no embedded telemetry track)
 3. The app parses telemetry, renders the flight path on the map, and begins playback automatically.
 
-That's it for the core viewer — drop files in, everything else happens in the browser, no server required. The map will show an estimated camera footprint immediately, clearly labelled as a flat-ground estimate derived from relative altitude.
+That's it for the core viewer — drop files in, everything else happens in the browser, no server required. When the viewer is served instead (see below), links to the **Places** editor and, with `dem/flights_server.py`, the **Flights** heatmap page appear top-right of the video. The map will show an estimated camera footprint immediately, clearly labelled as a flat-ground estimate derived from relative altitude.
 
 > **Tip:** The telemetry HUD and map are below the video. If they're not visible, a "Map & telemetry readout are below" indicator appears in the video area — scroll down to see them.
 
@@ -329,6 +329,14 @@ python3 dem/process_flights.py --force           # reprocess (e.g. after a new D
 
 No browser round-trip needed.
 
+**From the browser —** `flights.html` lists every MP4 under `mp4/`, grouped by folder, with whether it has telemetry, how much of its track lies on the area DEM, and whether its heatmap is done, missing or out of date. Tick videos and press **Make heatmaps for selected**, use **Make all missing**, or a row's **Make heatmap** / **Redo** button; jobs run one at a time through `process_flights.py`, and the log streams into the page. Click a video's name to open it in the viewer: it streams from the server and uses the telemetry already extracted, so even multi-GB files open straight away (`index.html?video=<mp4 path>&telemetry=<telemetry json path>`). It needs the project's own server, which also serves the viewer and places editor:
+
+```bash
+python3 dem/flights_server.py   # then open http://localhost:5002/flights.html
+```
+
+`serve_5002.command` starts the same server.
+
 **Camera calibration —** if `dem/camera-calibration.json` exists (saved from the viewer's calibration panel), `process_flights.py` passes its `pitch_offset_deg`, `yaw_offset_deg` and `fov_scale` to `compute_visibility.py` (`--pitch-offset`, `--yaw-offset`, `--fov-scale`). Each heatmap records the calibration it was made with, and `process_flights.py` recomputes any heatmap whose calibration differs from the file — no `--force` needed.
 
 ```json
@@ -447,6 +455,7 @@ Links only resolve while the archive drive is mounted. `process_flights.py` skip
 drone_video_telemetry/
   index.html                        # The viewer
   places.html                       # Places editor
+  flights.html                      # Heatmap status per video; queue processing
   mp4/
     matrice-4E-mp4/
       marathon/*.MP4                # Folder name = area name
@@ -454,6 +463,7 @@ drone_video_telemetry/
   dem/
     area_dem.py                     # Area extent, ELVIS tiles, mosaic, clip, index
     process_flights.py              # Batch orchestrator (ffmpeg + compute_visibility)
+    flights_server.py               # Project server + API behind flights.html
     preprocess_dem.py               # Clip area-dem.tif to flight-dem
     compute_visibility.py
     export_coverage.py              # Per-flight coverage polygons for QGIS

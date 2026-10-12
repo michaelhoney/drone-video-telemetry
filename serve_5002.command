@@ -9,8 +9,8 @@ LOG_FILE="/tmp/drone_video_telemetry_server_5002.log"
 
 cd "$SCRIPT_DIR"
 
-echo "Starting simple server in $SCRIPT_DIR on port $PORT..."
-python3 -m http.server "$PORT" >"$LOG_FILE" 2>&1 &
+echo "Starting server in $SCRIPT_DIR on port $PORT..."
+python3 dem/flights_server.py --port "$PORT" >"$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 
 cleanup() {

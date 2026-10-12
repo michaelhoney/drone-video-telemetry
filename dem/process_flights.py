@@ -18,6 +18,7 @@ Usage:
     python3 dem/process_flights.py
     python3 dem/process_flights.py --area marathon
     python3 dem/process_flights.py --force
+    python3 dem/process_flights.py mp4/matrice-4E-mp4/marathon/foo.MP4
 """
 
 import argparse
@@ -207,6 +208,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--mp4-dir", default=str(MP4_DIR),
                         help=f"Directory searched recursively for MP4s (default: {rel(MP4_DIR)})")
+    parser.add_argument("mp4s", nargs="*", help="Only process these MP4s (default: every area MP4)")
     parser.add_argument("--area", help="Only process MP4s belonging to this area")
     parser.add_argument("--force", action="store_true",
                         help="Reprocess even if outputs already exist")
@@ -220,7 +222,8 @@ def main():
               f"python3 dem/area_dem.py extent {args.area}", file=sys.stderr)
         sys.exit(1)
 
-    located = [(p, area_for_mp4(p)) for p in find_mp4s(args.mp4_dir)]
+    mp4s = [Path(p) for p in args.mp4s] if args.mp4s else find_mp4s(args.mp4_dir)
+    located = [(p, area_for_mp4(p)) for p in mp4s]
     jobs = [(p, a) for p, a in located if a and (not args.area or a == args.area)]
     unlocated = [p for p, a in located if not a]
 
