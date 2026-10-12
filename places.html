@@ -84,8 +84,9 @@
   <div class="help">
     Click a place to select and edit it — drag its vertices, or drag the shape to move it.
     Mark a seed <b>confirmed</b> once it's right. Hover a flight track to see which video it is.<br><br>
-    <b>Save</b> writes <code>dem/areas/<span class="areaName"></span>/places.geojson</code>: in Chrome or Edge pick
-    that file the first time, then later saves go straight to it. Other browsers download a copy to move there.
+    <b>Save</b> writes <code>dem/areas/<span class="areaName"></span>/places.geojson</code> directly when served by
+    <code>dem/flights_server.py</code>. Under another server, Chrome or Edge ask you to pick that file the first time;
+    other browsers download a copy to move there.
     Edits are also kept as a draft in this browser until saved.
   </div>
 </aside>
@@ -118,6 +119,7 @@ let nextId = 1;
 let dirty = false;
 let fileHandle = null;
 let savedSnapshot = '';
+let areaBounds = null;    // the area's DEM extent from index.json, for when there's nothing to fit
 
 // ── Loading ──
 
@@ -131,7 +133,10 @@ async function loadAreas() {
   const select = document.getElementById('area');
   try {
     const index = await fetchJson('dem/areas/index.json');
-    for (const a of index.areas) select.add(new Option(a.name, a.name, false, a.name === area));
+    for (const a of index.areas) {
+      select.add(new Option(a.name, a.name, false, a.name === area));
+      if (a.name === area && a.bounds) areaBounds = L.latLngBounds([a.bounds.south, a.bounds.west], [a.bounds.north, a.bounds.east]);
+    }
   } catch {
     select.add(new Option(area, area, true, true));
   }
@@ -262,10 +267,17 @@ function removePlace(id) {
   markChanged();
 }
 
+// Circle.getBounds() needs a map with a view, and fitAll() is what sets the first one.
+function layerBounds(layer) {
+  return layer instanceof L.Circle ? layer.getLatLng().toBounds(layer.getRadius() * 2) : layer.getBounds();
+}
+
 function fitAll() {
-  const layers = [placeLayer, trackLayer].map(g => g.getLayers().length ? L.featureGroup(g.getLayers()) : null).filter(Boolean);
-  const bounds = layers.reduce((b, g) => b ? b.extend(g.getBounds()) : g.getBounds(), null);
+  // Paddock labels are tooltips, which have no bounds.
+  const layers = [placeLayer, trackLayer, paddockLayer].flatMap(g => g.getLayers()).filter(l => l.getBounds);
+  const bounds = layers.reduce((b, l) => b.extend(layerBounds(l)), L.latLngBounds([]));
   if (bounds && bounds.isValid()) map.fitBounds(bounds, { padding: [30, 30] });
+  else if (areaBounds) map.fitBounds(areaBounds);
   else map.setView([-42.14, 147.65], 13);
 }
 
@@ -412,6 +424,7 @@ function circlePolygon(centre, radius, steps = 64) {
 
 async function save() {
   const text = serialise();
+  if (await saveToServer(text)) return;
   if (!window.showSaveFilePicker) { download(text); return; }
   try {
     if (!fileHandle) {
@@ -430,6 +443,26 @@ async function save() {
   } catch (err) {
     if (err.name !== 'AbortError') { status(`Save failed: ${err.message}`); console.error(err); }
   }
+}
+
+// dem/flights_server.py writes places.geojson directly, in any browser. Returns false
+// when the page isn't served by it (plain http.server answers PUT with 501).
+async function saveToServer(text) {
+  let res;
+  try {
+    res = await fetch(`api/places/${encodeURIComponent(area)}`, { method: 'PUT', headers: { 'Content-Type': 'application/geo+json' }, body: text });
+  } catch { return false; }
+  if (res.status === 404 || res.status === 405 || res.status === 501) return false;
+  if (!res.ok) {
+    const { error } = await res.json().catch(() => ({}));
+    status(`Save failed: ${error || 'HTTP ' + res.status}`);
+    return true;
+  }
+  savedSnapshot = text;
+  clearDraft();
+  setDirty(false);
+  status(`Saved ${places.length} place(s) to dem/areas/${area}/places.geojson at ${new Date().toLocaleTimeString()}`);
+  return true;
 }
 
 function download(text = serialise()) {

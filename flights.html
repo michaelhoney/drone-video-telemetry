@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flight heatmaps</title>
+<style>
+  :root {
+    --bg: #15181c; --panel: #1d2126; --line: #2e343b; --text: #e6e8ea; --muted: #8b939c;
+    --ok: #3fb950; --warn: #f5a524; --danger: #e5484d; --accent: #37c6e8;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { display: grid; grid-template-rows: auto 1fr auto; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 14px; margin: 0 8px 0 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  header a { color: var(--muted); text-decoration: none; }
+  header a:hover { color: var(--text); }
+  button, select { font: inherit; color: var(--text); background: #262b31;
+    border: 1px solid var(--line); border-radius: 6px; }
+  button { padding: 5px 10px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: #4a525b; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: #1f5e6e; border-color: #2b7a8e; }
+  button.small { padding: 2px 8px; font-size: 12px; }
+  select { padding: 4px 6px; }
+  #status { color: var(--muted); font-size: 12px; }
+  main { overflow-y: auto; }
+  #error { display: none; margin: 12px; padding: 8px 12px; border-radius: 8px; background: #3d1416; color: #f5a3a5; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 500; font-size: 12px; z-index: 1; }
+  td.name { white-space: normal; word-break: break-all; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  tr.folder td { background: #191c20; color: var(--muted); font-size: 12px; padding-top: 12px; }
+  tr.folder td b { color: var(--text); font-weight: 600; }
+  tr.offline td.name { color: var(--muted); }
+  tr:not(.folder):hover td { background: #1b1f24; }
+  td.name a { color: var(--text); text-decoration: none; }
+  td.name a:hover { color: var(--accent); text-decoration: underline; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; border: 1px solid; }
+  .badge.current { color: var(--ok); border-color: #2a6b35; }
+  .badge.stale, .badge.missing { color: var(--warn); border-color: #7a5512; }
+  .badge.running { color: var(--accent); border-color: #2b7a8e; }
+  .badge.queued { color: var(--accent); border-color: #24505b; border-style: dashed; }
+  .badge.fail { color: var(--danger); border-color: #7a2a2d; }
+  .badge.na { color: var(--muted); border-color: var(--line); }
+  .sub { color: var(--muted); font-size: 12px; }
+  .warn { color: var(--warn); }
+  .tick { color: var(--ok); }
+  @keyframes pulse { 50% { opacity: .4; } }
+  .badge.running { animation: pulse 1.4s ease-in-out infinite; }
+  footer { border-top: 1px solid var(--line); background: var(--panel); }
+  footer summary { padding: 6px 12px; cursor: pointer; color: var(--muted); }
+  #log { margin: 0; padding: 8px 12px; max-height: 30vh; overflow-y: auto; background: #101215;
+    font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: #b8bfc6; white-space: pre-wrap; }
+  @media (max-width: 760px) {
+    .wide { display: none; }
+    th, td { padding: 6px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Flight heatmaps</h1>
+  <select id="filter" aria-label="Show">
+    <option value="all">All videos</option>
+    <option value="todo">Needs heatmap</option>
+    <option value="area">In an area</option>
+  </select>
+  <button id="process-selected" class="primary" disabled>Make heatmaps for selected</button>
+  <button id="process-missing">Make all missing</button>
+  <span id="status"></span>
+  <span class="spacer"></span>
+  <a href="index.html">Viewer</a>
+  <a href="places.html">Places</a>
+</header>
+<main>
+  <div id="error"></div>
+  <table>
+    <thead><tr>
+      <th><input type="checkbox" id="select-all" aria-label="Select all"></th>
+      <th>Video</th>
+      <th class="wide">Size</th>
+      <th>Telemetry</th>
+      <th class="wide" title="Share of the flight track inside the area's terrain model">On DEM</th>
+      <th>Heatmap</th>
+      <th></th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+<footer>
+  <details id="log-panel">
+    <summary>Processing log</summary>
+    <pre id="log">Nothing run yet.</pre>
+  </details>
+</footer>
+<script>
+const $ = id => document.getElementById(id);
+const selected = new Set();
+let flights = [], jobs = { current: null, queued: [], results: {}, log: [] };
+let pollTimer = null;
+
+const FILTER_KEY = 'flights.filter';
+try { $('filter').value = localStorage.getItem(FILTER_KEY) || 'all'; } catch {}
+
+function fmtSize(bytes) {
+  if (bytes == null) return '';
+  return bytes >= 1e9 ? (bytes / 1e9).toFixed(1) + ' GB' : Math.round(bytes / 1e6) + ' MB';
+}
+function fmtDate(secs) {
+  return secs ? new Date(secs * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+}
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// What can be done with a flight: a heatmap can only be made in an area with a DEM, from a reachable file.
+const canProcess = f => f.area && f.heatmap !== 'no-dem' && f.online;
+const needsHeatmap = f => canProcess(f) && (f.heatmap === 'missing' || f.heatmap === 'stale');
+
+function jobState(f) {
+  if (jobs.current === f.path) return 'running';
+  if (jobs.queued.includes(f.path)) return 'queued';
+  return null;
+}
+
+function heatmapBadge(f) {
+  const job = jobState(f);
+  if (job === 'running') return '<span class="badge running">Processing…</span>';
+  if (job === 'queued') return '<span class="badge queued">Queued</span>';
+  if (jobs.results[f.path] === 'FAIL') return '<span class="badge fail" title="See the processing log">Failed</span>';
+  switch (f.heatmap) {
+    case 'current': return `<span class="badge current">Done</span> <span class="sub">${fmtDate(f.heatmap_made)}</span>`;
+    case 'stale': return '<span class="badge stale" title="Camera model or calibration changed since this was made">Out of date</span>';
+    case 'missing': return '<span class="badge missing">Not made</span>';
+    case 'no-dem': return '<span class="badge na" title="Build the area DEM first: python3 dem/area_dem.py ingest <area>">No area DEM</span>';
+    default: return '<span class="badge na" title="Move the video into a folder named after an area in dem/areas/">Not in an area</span>';
+  }
+}
+
+function coverageCell(f) {
+  if (f.dem_coverage == null) return '';
+  const pct = Math.round(f.dem_coverage * 100);
+  return pct < 95
+    ? `<span class="warn" title="Part of this flight is outside the area's terrain model, so its heatmap will be incomplete">${pct}%</span>`
+    : `${pct}%`;
+}
+
+// Opens in the viewer, streaming the video and reading the telemetry process_flights.py extracted.
+function nameCell(f) {
+  if (!f.online || !f.telemetry) return esc(f.name);
+  const href = `index.html?video=${encodeURIComponent(f.path)}&telemetry=${encodeURIComponent(f.telemetry)}`;
+  return `<a href="${esc(href)}" target="viewer" title="Open in the viewer">${esc(f.name)}</a>`;
+}
+
+function actionCell(f) {
+  if (!canProcess(f) || jobState(f)) return '';
+  const label = f.heatmap === 'current' ? 'Redo' : 'Make heatmap';
+  return `<button class="small" data-process="${esc(f.path)}" data-force="${f.heatmap === 'current'}">${label}</button>`;
+}
+
+function visible() {
+  const mode = $('filter').value;
+  if (mode === 'todo') return flights.filter(f => needsHeatmap(f) || jobState(f));
+  if (mode === 'area') return flights.filter(f => f.area);
+  return flights;
+}
+
+function render() {
+  const rows = [];
+  let folder = null;
+  for (const f of visible()) {
+    if (f.folder !== folder) {
+      folder = f.folder;
+      const area = f.area ? ` · area <b>${esc(f.area)}</b>` : '';
+      rows.push(`<tr class="folder"><td></td><td colspan="6"><b>${esc(folder)}</b>${area}</td></tr>`);
+    }
+    const offline = !f.online;
+    rows.push(`<tr class="${offline ? 'offline' : ''}">
+      <td><input type="checkbox" data-select="${esc(f.path)}" ${selected.has(f.path) ? 'checked' : ''} ${canProcess(f) ? '' : 'disabled'} aria-label="Select ${esc(f.name)}"></td>
+      <td class="name">${nameCell(f)}${f.link ? ' <span class="sub">↗ link</span>' : ''}${offline ? ' <span class="sub">(archive not mounted)</span>' : ''}</td>
+      <td class="num wide">${fmtSize(f.size)}</td>
+      <td>${f.telemetry ? '<span class="tick">✓</span>' : (f.area ? '<span class="sub">–</span>' : '')}</td>
+      <td class="num wide">${coverageCell(f)}</td>
+      <td>${heatmapBadge(f)}</td>
+      <td>${actionCell(f)}</td>
+    </tr>`);
+  }
+  $('rows').innerHTML = rows.join('') || '<tr><td colspan="7" class="sub">Nothing to show.</td></tr>';
+
+  for (const p of [...selected]) if (!flights.some(f => f.path === p && canProcess(f))) selected.delete(p);
+  const selectable = visible().filter(canProcess);
+  $('select-all').checked = selectable.length > 0 && selectable.every(f => selected.has(f.path));
+  $('process-selected').disabled = selected.size === 0;
+  const missing = flights.filter(f => needsHeatmap(f) && !jobState(f));
+  $('process-missing').disabled = missing.length === 0;
+  $('process-missing').textContent = missing.length ? `Make all missing (${missing.length})` : 'Make all missing';
+
+  const done = flights.filter(f => f.heatmap === 'current').length;
+  const inArea = flights.filter(f => f.area).length;
+  const busy = jobs.current ? ` · processing ${jobs.current.split('/').pop()}${jobs.queued.length ? `, ${jobs.queued.length} queued` : ''}` : '';
+  $('status').textContent = `${done} of ${inArea} area videos heatmapped${busy}`;
+
+  const log = $('log');
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  log.textContent = jobs.log.length ? jobs.log.join('\n') : 'Nothing run yet.';
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+  if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+  return res.json();
+}
+
+async function refresh() {
+  clearTimeout(pollTimer);
+  try {
+    const data = await api('/api/flights');
+    flights = data.flights;
+    jobs = data.jobs;
+    $('error').style.display = 'none';
+    render();
+  } catch (err) {
+    $('error').innerHTML = 'Can’t reach the flights API. Start the server with <code>python3 dem/flights_server.py</code> '
+      + 'and open <code>http://localhost:5002/flights.html</code>.';
+    $('error').style.display = 'block';
+  }
+  const busy = jobs.current || jobs.queued.length;
+  pollTimer = setTimeout(refresh, busy ? 1500 : 10000);
+}
+
+async function process(paths, force = false) {
+  if (!paths.length) return;
+  jobs = await api('/api/process', { paths, force });
+  $('log-panel').open = true;
+  render();
+  refresh();
+}
+
+$('rows').addEventListener('click', e => {
+  const btn = e.target.closest('[data-process]');
+  if (btn) process([btn.dataset.process], btn.dataset.force === 'true');
+});
+$('rows').addEventListener('change', e => {
+  const box = e.target.closest('[data-select]');
+  if (!box) return;
+  box.checked ? selected.add(box.dataset.select) : selected.delete(box.dataset.select);
+  render();
+});
+$('select-all').addEventListener('change', e => {
+  for (const f of visible().filter(canProcess)) e.target.checked ? selected.add(f.path) : selected.delete(f.path);
+  render();
+});
+$('process-selected').addEventListener('click', () => {
+  const chosen = flights.filter(f => selected.has(f.path));
+  // Selected videos that already have a current heatmap are redone; the rest are made.
+  const redo = chosen.filter(f => f.heatmap === 'current').map(f => f.path);
+  const make = chosen.filter(f => f.heatmap !== 'current').map(f => f.path);
+  if (redo.length && !confirm(`${redo.length} selected video(s) already have a heatmap. Redo them?`)) {
+    process(make);
+  } else {
+    process(make).then(() => process(redo, true));
+  }
+  selected.clear();
+});
+$('process-missing').addEventListener('click', () => process(flights.filter(needsHeatmap).map(f => f.path)));
+$('filter').addEventListener('change', () => {
+  try { localStorage.setItem(FILTER_KEY, $('filter').value); } catch {}
+  render();
+});
+
+refresh();
+</script>
+</body>
+</html>

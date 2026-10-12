@@ -115,6 +115,19 @@
     backdrop-filter: blur(4px);
   }
 
+  /* Links to the other pages; only shown when the viewer is served (see initSiteNav) */
+  .site-nav {
+    position: absolute; top: 10px; right: 16px; z-index: 6;
+    display: none; gap: 2px; padding: 2px;
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 999px;
+    background: rgba(10,10,18,0.72); backdrop-filter: blur(4px);
+    font-size: 0.72em;
+  }
+  .site-nav.visible { display: flex; }
+  .site-nav a { padding: 2px 9px; border-radius: 999px; color: #8f8fa4; text-decoration: none; }
+  .site-nav a:hover { color: #ffa028; background: rgba(255,255,255,0.06); }
+  .site-nav a[hidden] { display: none; }
+
   /* ── HUD strip between video and map ── */
   .hud-strip {
     display: grid;
@@ -415,6 +428,10 @@
   <div class="video-panel">
     <div class="video-wrap">
       <div class="app-version">v0.6</div>
+      <nav class="site-nav" id="siteNav">
+        <a href="flights.html" target="flights" id="navFlights" hidden>Flights</a>
+        <a href="places.html" target="places">Places</a>
+      </nav>
       <div class="video-fit-toggle" id="videoFitToggle">
         <button class="vft-opt active" id="vftFillH" title="Fill height (crop sides)">
           <svg width="18" height="14" viewBox="0 0 18 14"><rect x="1" y="1" width="16" height="12" rx="1" fill="none" stroke="#888" stroke-width="1"/>
@@ -1476,6 +1493,56 @@ async function loadMp4(file) {
     statusMsg.classList.add('error');
     statusMsg.textContent = 'Error: ' + err.message;
     dropZone.querySelector('p').textContent = 'Telemetry extraction failed';
+    console.error(err);
+  }
+}
+
+
+// Load a video the server can see, with telemetry already extracted by
+// process_flights.py, e.g. index.html?video=mp4/.../foo.MP4&telemetry=dem/areas/<area>/telemetry/foo-telemetry.json
+// (flights.html links here). The video streams from the server instead of
+// being read whole, so multi-GB files open at once; the server must support
+// byte ranges for seeking (dem/flights_server.py does).
+async function loadFromServer(videoPath, telemetryPath) {
+  const statusMsg = document.getElementById('statusMsg');
+  statusMsg.style.display = 'block';
+  statusMsg.classList.remove('error');
+  statusMsg.textContent = 'Loading telemetry...';
+
+  const name = videoPath.split('/').pop();
+  currentBasename = name.replace(/\.[^.]+$/, '');
+
+  const url = path => path.split('/').map(encodeURIComponent).join('/');
+  video.src = url(videoPath);
+  video.style.display = 'block';
+
+  dropZone.classList.add('loaded');
+  dropZone.querySelector('h3').textContent = name;
+  dropZone.querySelector('p').textContent = 'Loading telemetry...';
+
+  try {
+    const res = await fetch(url(telemetryPath));
+    if (!res.ok) throw new Error(`telemetry ${telemetryPath}: HTTP ${res.status}`);
+    // Same entries the mov_text pathway parses in the browser (process_flights.py mirrors parseTelemetryLine).
+    currentTelemetryPath = PATH_DRONE_POS;
+    telemetry = await res.json();
+    if (telemetry.length === 0) {
+      statusMsg.classList.add('error');
+      statusMsg.textContent = 'No telemetry in ' + telemetryPath;
+      dropZone.querySelector('p').textContent = 'No telemetry found';
+      return;
+    }
+    telemetryReady = true;
+    dropZone.querySelector('p').textContent = telemetry.length + ' telemetry frames loaded';
+    initFlightPath();
+    document.getElementById('videoCtrlBar').style.display = 'flex';
+    map.invalidateSize();
+    checkMapVisible();
+    video.play();
+  } catch (err) {
+    statusMsg.classList.add('error');
+    statusMsg.textContent = 'Error: ' + err.message;
+    dropZone.querySelector('p').textContent = 'Telemetry loading failed';
     console.error(err);
   }
 }
@@ -2823,6 +2890,26 @@ initFlightPath = function() {
     applyLayout();
     map.invalidateSize();
   });
+})();
+
+// ── Site nav ──
+// The other pages need a server (places.html fetches area files; flights.html
+// needs dem/flights_server.py's API), so link them only when served, and link
+// Flights only when that API answers. They open in their own tabs so a loaded
+// video isn't lost.
+(async function initSiteNav() {
+  if (!location.protocol.startsWith('http')) return;
+  document.getElementById('siteNav').classList.add('visible');
+  try {
+    const res = await fetch('api/jobs', { cache: 'no-store' });
+    if (res.ok) document.getElementById('navFlights').hidden = false;
+  } catch (e) { /* plain static server: no flights API */ }
+})();
+
+(function loadFromQuery() {
+  const params = new URLSearchParams(location.search);
+  const videoPath = params.get('video'), telemetryPath = params.get('telemetry');
+  if (location.protocol.startsWith('http') && videoPath && telemetryPath) loadFromServer(videoPath, telemetryPath);
 })();
 </script>
 </body>
